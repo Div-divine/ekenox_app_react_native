@@ -23,7 +23,7 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen = ({ navigation }: LoginScreenProps) => {
-  const { login, resendVerificationEmail } = useAuth();
+  const { login, resendVerificationEmail, socialLogin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -33,6 +33,12 @@ export const LoginScreen = ({ navigation }: LoginScreenProps) => {
   const [forgotPasswordVisible, setForgotPasswordVisible] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [isForgotLoading, setIsForgotLoading] = useState(false);
+
+  // Social SSO simulator modal state
+  const [socialSimulatorVisible, setSocialSimulatorVisible] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [socialToken, setSocialToken] = useState('');
+  const [isSocialLoading, setIsSocialLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -133,7 +139,31 @@ export const LoginScreen = ({ navigation }: LoginScreenProps) => {
   };
 
   const handleSocialLogin = (provider: string) => {
-    Alert.alert('Social Auth', `${provider} login is not configured yet in this client.`);
+    setSelectedProvider(provider);
+    setSocialToken(''); // Reset
+    setSocialSimulatorVisible(true);
+  };
+
+  const handleSocialSubmit = async () => {
+    if (!socialToken.trim()) {
+      Alert.alert('Error', 'Please enter or select a test token.');
+      return;
+    }
+
+    setIsSocialLoading(true);
+    try {
+      console.log(`🔄 Attempting simulated social SSO for: ${selectedProvider}`);
+      const result = await socialLogin(selectedProvider.toLowerCase(), socialToken.trim());
+      if (result.success) {
+        setSocialSimulatorVisible(false);
+      } else {
+        Alert.alert('Social Auth Failed', result.message || 'Verification failed on backend.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'SSO authentication error.');
+    } finally {
+      setIsSocialLoading(false);
+    }
   };
 
   return (
@@ -301,6 +331,101 @@ export const LoginScreen = ({ navigation }: LoginScreenProps) => {
                   <ActivityIndicator color="white" size="small" />
                 ) : (
                   <Text style={styles.modalBtnSubmitText}>Send Link</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Social SSO Simulator Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={socialSimulatorVisible}
+        onRequestClose={() => setSocialSimulatorVisible(false)}
+      >
+        <View style={styles.modalCentered}>
+          <View style={styles.modalView}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <FontAwesome
+                name={selectedProvider.toLowerCase() as any}
+                size={22}
+                color={
+                  selectedProvider === 'Google'
+                    ? '#db4437'
+                    : selectedProvider === 'Facebook'
+                    ? '#3b5998'
+                    : selectedProvider === 'Twitter'
+                    ? '#1da1f2'
+                    : '#c13584'
+                }
+              />
+              <Text style={[styles.modalTitle, { marginBottom: 0, marginLeft: 8 }]}>
+                {selectedProvider} SSO Simulator
+              </Text>
+            </View>
+            <Text style={styles.modalDescription}>
+              Input an OAuth access token to authenticate with the Symfony backend. (Tip: You can use any test string like "simulated_token" for local dev login).
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Enter OAuth access_token..."
+              placeholderTextColor="#9ca3af"
+              value={socialToken}
+              onChangeText={setSocialToken}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {/* Quick helper tokens */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16, gap: 8 }}>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#f3f4f6',
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 6,
+                  borderWidth: 1,
+                  borderColor: '#e5e7eb',
+                }}
+                onPress={() => setSocialToken('dev_sso_bypass_token')}
+              >
+                <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500' }}>Prefill Debug Token</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#f3f4f6',
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 6,
+                  borderWidth: 1,
+                  borderColor: '#e5e7eb',
+                }}
+                onPress={() => setSocialToken('google_oauth_test_token')}
+              >
+                <Text style={{ fontSize: 12, color: '#374151', fontWeight: '500' }}>Prefill Google Token</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnCancel]}
+                onPress={() => setSocialSimulatorVisible(false)}
+              >
+                <Text style={styles.modalBtnCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnSubmit]}
+                onPress={handleSocialSubmit}
+                disabled={isSocialLoading}
+              >
+                {isSocialLoading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <Text style={styles.modalBtnSubmitText}>Authenticate</Text>
                 )}
               </TouchableOpacity>
             </View>

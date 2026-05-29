@@ -8,6 +8,7 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (email: string, password: string, name?: string) => Promise<AuthResult>;
+  socialLogin: (provider: string, token: string) => Promise<AuthResult>;
   logout: () => Promise<AuthResult>;
   resendVerificationEmail: (userId: number) => Promise<AuthResult>;
   updateUser: (user: User) => Promise<void>;
@@ -79,6 +80,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return result;
   };
 
+  const socialLogin = async (provider: string, accessToken: string): Promise<AuthResult> => {
+    setIsLoading(true);
+    const result = await authService.loginWithSocial(provider, accessToken);
+    if (result.success && result.user) {
+      setUser(result.user);
+      const tokenVal = await authService.getToken();
+      setToken(tokenVal);
+    }
+    setIsLoading(false);
+    return result;
+  };
+
   const logout = async (): Promise<AuthResult> => {
     setIsLoading(true);
     const result = await authService.logout();
@@ -126,6 +139,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         isLoading,
         login,
         signup,
+        socialLogin,
         logout,
         resendVerificationEmail,
         updateUser,

@@ -409,6 +409,65 @@ class AuthService {
       };
     }
   }
+
+  // Social login/sign up via OAuth accessToken
+  public async loginWithSocial(provider: string, accessToken: string, refreshToken?: string): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Requesting Social SSO Login for provider: ${provider}...`);
+      const response = await axios.post(`${this.baseUrl}/auth/social/${provider.toLowerCase()}`, {
+        access_token: accessToken,
+        refresh_token: refreshToken || null,
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      console.log('=== SOCIAL LOGIN DEBUG INFO ===');
+      console.log('Status Code:', response.status);
+      console.log('Response Body:', response.data);
+
+      const data = response.data;
+      if ((response.status === 200 || response.status === 201) && data.success === true) {
+        const token = data.data?.token;
+        if (!token) {
+          return {
+            success: false,
+            message: 'No authentication token received',
+          };
+        }
+        await this.saveToken(token);
+
+        const userData = data.data?.user;
+        if (!userData) {
+          return {
+            success: false,
+            message: 'No user data received',
+          };
+        }
+
+        const user = parseUserFromJson(userData);
+        await this.saveUser(user);
+
+        return {
+          success: true,
+          user,
+          message: data.message || 'Social login successful',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Social login failed',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Network/API error in loginWithSocial:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
 }
 
 export default new AuthService();
