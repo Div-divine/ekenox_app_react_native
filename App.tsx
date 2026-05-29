@@ -4,11 +4,12 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { AuthNavigator } from './src/navigation/AuthNavigator';
-import { HomeScreen } from './src/screens/HomeScreen';
+import { OnboardingScreen } from './src/screens/auth/OnboardingScreen';
+import { FeedScreen } from './src/screens/FeedScreen';
 import { AppColors } from './src/theme/colors';
 
 const RootApp = () => {
-  const { token, isLoading } = useAuth();
+  const { token, user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -21,7 +22,15 @@ const RootApp = () => {
   return (
     <NavigationContainer>
       <StatusBar style="light" />
-      {token ? <HomeScreen /> : <AuthNavigator />}
+      {token ? (
+        user?.hasSeenOnboarding ? (
+          <FeedScreen />
+        ) : (
+          <OnboardingScreen />
+        )
+      ) : (
+        <AuthNavigator />
+      )}
     </NavigationContainer>
   );
 };

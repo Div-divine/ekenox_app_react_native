@@ -89,7 +89,7 @@ class AuthService {
             };
           }
           await this.saveToken(token);
-          
+
           const userData = data.data?.user;
           if (!userData) {
             return {
@@ -97,10 +97,10 @@ class AuthService {
               message: 'No user data received',
             };
           }
-          
+
           const user = parseUserFromJson(userData);
           await this.saveUser(user);
-          
+
           return {
             success: true,
             user,
@@ -148,14 +148,14 @@ class AuthService {
         if (token) {
           await this.saveToken(token);
         }
-        
+
         const userData = data.data?.user;
         let user: User | undefined;
         if (userData) {
           user = parseUserFromJson(userData);
           await this.saveUser(user);
         }
-        
+
         return {
           success: true,
           user,
@@ -186,10 +186,10 @@ class AuthService {
       } catch (e) {
         console.warn('API logout call failed/warned:', e);
       }
-      
+
       await this.clearToken();
       await this.clearUser();
-      
+
       return {
         success: true,
         message: 'Logout successful',
@@ -212,7 +212,7 @@ class AuthService {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000,
       });
-      
+
       const data = response.data;
       if (response.status === 200 && data.success === true) {
         return {
@@ -227,6 +227,181 @@ class AuthService {
       }
     } catch (error: any) {
       console.error('❌ Resend verification error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+  // Forgot Password
+  public async forgotPassword(email: string): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Requesting password reset for: ${email}`);
+      const response = await axios.post(`${this.baseUrl}${ApiConfig.forgotPassword}`, {
+        email,
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.success === true) {
+        return {
+          success: true,
+          message: data.message || 'Password reset email sent successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Failed to send password reset email',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Forgot password error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Validate reset token
+  public async validateResetToken(token: string): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Validating reset token...`);
+      const response = await axios.post(`${this.baseUrl}${ApiConfig.validateResetToken}`, {
+        token,
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.success === true) {
+        return {
+          success: true,
+          message: data.message || 'Token is valid',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Invalid or expired token',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Token validation error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Reset password with token
+  public async resetPasswordWithToken(token: string, newPassword: string): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Resetting password with token...`);
+      const response = await axios.post(`${this.baseUrl}${ApiConfig.resetPassword}`, {
+        token,
+        password: newPassword,
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.success === true) {
+        return {
+          success: true,
+          message: data.message || 'Password reset successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Password reset failed',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Password reset error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Update onboarding status
+  public async updateOnboardingStatus(hasSeenOnboarding: boolean): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Updating onboarding status to: ${hasSeenOnboarding}`);
+      const headers = await this.getHeaders();
+      const response = await axios.put(`${this.baseUrl}${ApiConfig.updateOnboarding}`, {
+        has_seen_onboarding: hasSeenOnboarding,
+      }, {
+        headers,
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.success === true) {
+        // Update stored user data
+        const currentUser = await this.getStoredUser();
+        if (currentUser) {
+          currentUser.hasSeenOnboarding = hasSeenOnboarding;
+          await this.saveUser(currentUser);
+          console.log('✅ Local user data updated with onboarding status');
+        }
+        return {
+          success: true,
+          message: data.message || 'Onboarding status updated',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Failed to update onboarding status',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Update onboarding error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Get user profile
+  public async getUserProfile(): Promise<AuthResult> {
+    try {
+      console.log(`🔄 Fetching user profile from server...`);
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}${ApiConfig.userInfo}`, {
+        headers,
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.data) {
+        const user = parseUserFromJson(data.data);
+        await this.saveUser(user);
+        return {
+          success: true,
+          user,
+          message: data.message || 'Profile retrieved successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Failed to retrieve user profile',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Get user profile error:', error);
       const message = error.response?.data?.message || error.message || 'Network error';
       return {
         success: false,

@@ -16,6 +16,7 @@ import {
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { AppColors } from '../../theme/colors';
+import authService from '../../services/authService';
 
 interface LoginScreenProps {
   navigation: any;
@@ -98,10 +99,32 @@ export const LoginScreen = ({ navigation }: LoginScreenProps) => {
 
     setIsForgotLoading(true);
     try {
-      // Direct post or alert placeholder matching the flutter service call
-      Alert.alert('Reset Link Sent', 'If this email is registered, we have sent a reset password link.');
-      setForgotPasswordVisible(false);
-      setForgotEmail('');
+      const result = await authService.forgotPassword(forgotEmail.trim());
+      if (result.success) {
+        Alert.alert(
+          'Reset Link Sent',
+          result.message || 'If this email is registered, we have sent a reset password link.',
+          [
+            {
+              text: 'Enter Token Manually',
+              onPress: () => {
+                setForgotPasswordVisible(false);
+                setForgotEmail('');
+                navigation.navigate('ResetPassword');
+              },
+            },
+            {
+              text: 'OK',
+              onPress: () => {
+                setForgotPasswordVisible(false);
+                setForgotEmail('');
+              },
+            },
+          ]
+        );
+      } else {
+        Alert.alert('Error', result.message || 'Failed to send reset link.');
+      }
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to send reset link.');
     } finally {

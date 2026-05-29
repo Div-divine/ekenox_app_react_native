@@ -11,6 +11,8 @@ interface AuthContextType {
   logout: () => Promise<AuthResult>;
   resendVerificationEmail: (userId: number) => Promise<AuthResult>;
   updateUser: (user: User) => Promise<void>;
+  completeOnboarding: () => Promise<AuthResult>;
+  refreshProfile: () => Promise<AuthResult>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,6 +32,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (storedToken && storedUser) {
           setToken(storedToken);
           setUser(storedUser);
+          
+          // Verify session and load latest profile status
+          const profileResult = await authService.getUserProfile();
+          if (profileResult.success && profileResult.user) {
+            setUser(profileResult.user);
+          } else {
+            console.warn('Session invalid or expired, clearing credentials');
+            await authService.clearToken();
+            await authService.clearUser();
+            setToken(null);
+            setUser(null);
+          }
         }
       } catch (e) {
         console.warn('Failed to load local auth credentials', e);
@@ -83,6 +97,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(updatedUser);
   };
 
+  const completeOnboarding = async (): Promise<AuthResult> => {
+    setIsLoading(true);
+    const result = await authService.updateOnboardingStatus(true);
+    if (result.success) {
+      const freshUser = await authService.getStoredUser();
+      if (freshUser) {
+        setUser(freshUser);
+      }
+    }
+    setIsLoading(false);
+    return result;
+  };
+
+  const refreshProfile = async (): Promise<AuthResult> => {
+    const result = await authService.getUserProfile();
+    if (result.success && result.user) {
+      setUser(result.user);
+    }
+    return result;
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -94,6 +129,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         logout,
         resendVerificationEmail,
         updateUser,
+        completeOnboarding,
+        refreshProfile,
       }}
     >
       {children}
