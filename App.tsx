@@ -3,11 +3,15 @@ import { StyleSheet, View, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { AuthNavigator } from './src/navigation/AuthNavigator';
 import { OnboardingScreen } from './src/screens/auth/OnboardingScreen';
+import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import { FeedScreen } from './src/screens/FeedScreen';
 import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
+import { EventsScreen } from './src/screens/EventsScreen';
+import { EventDetailScreen } from './src/screens/EventDetailScreen';
 import { AppColors } from './src/theme/colors';
 
 const AppStack = createStackNavigator();
@@ -15,8 +19,11 @@ const AppStack = createStackNavigator();
 const AuthenticatedNavigator = () => {
   return (
     <AppStack.Navigator screenOptions={{ headerShown: false }}>
+      <AppStack.Screen name="MainTabs" component={MainTabNavigator} />
       <AppStack.Screen name="Feed" component={FeedScreen} />
       <AppStack.Screen name="GroupDetail" component={GroupDetailScreen} />
+      <AppStack.Screen name="Events" component={EventsScreen} />
+      <AppStack.Screen name="EventDetail" component={EventDetailScreen} />
     </AppStack.Navigator>
   );
 };
@@ -50,9 +57,11 @@ const RootApp = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <RootApp />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <RootApp />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 

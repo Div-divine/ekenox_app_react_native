@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -14,6 +14,9 @@ import {
   Platform,
   RefreshControl,
   ActivityIndicator,
+  Modal,
+  Clipboard,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -21,31 +24,78 @@ import { AppColors } from '../theme/colors';
 import { ApiConfig } from '../config/api';
 import feedService, { Feed, Group, Event } from '../services/feedService';
 import { useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { useEventListener } from 'expo';
+import { UrlHelper } from '../utils/urlHelper';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Cohesive Media URL Resolver leveraging the global UrlHelper utility
+const resolveMediaUrl = (url?: string) => {
+  return UrlHelper.convertPathToUrl(url);
+};
+
 
 export const FeedScreen = () => {
   const { user, logout } = useAuth();
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
 
   const [currentTab, setCurrentTab] = useState(0); // 0 = Feed, 1 = Groups
   const [posts, setPosts] = useState<Feed[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
+
+  // Dynamic Tip of the Day State
+  const [dailyTip, setDailyTip] = useState<any>(null);
+  const [tipExpanded, setTipExpanded] = useState(false);
   const [showTip, setShowTip] = useState(true);
+
+  // Stories State
+  const [stories, setStories] = useState<any[]>([]);
+  const [storyModalVisible, setStoryModalVisible] = useState(false);
+  const [selectedStoryIndex, setSelectedStoryIndex] = useState<number | null>(null);
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [storyVideoLoading, setStoryVideoLoading] = useState(false);
+  const storyTimer = useRef<any | null>(null);
+
+  const player = useVideoPlayer(null, (p) => {
+    p.loop = false;
+  });
+
+  // Group Explorer Tab State ('public' | 'user' | 'discover')
+  const [groupActiveTab, setGroupActiveTab] = useState<'public' | 'user' | 'discover'>('public');
+
   const [showProfilePanel, setShowProfilePanel] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [actionLoadingId, setActionLoadingId] = useState<string | number | null>(null);
 
-  // Load all dynamic data from Symfony backend APIs
+  // Fetch all live data from Symphony backend
   const loadData = async () => {
     try {
       console.log('🔄 Fetching live data from Symfony backend...');
-      const feedPosts = await feedService.getFeeds(1, 15);
-      const publicGroups = await feedService.getGroups('public', 1, 15);
-      const featuredEvents = await feedService.getEvents(10, 0);
 
+      // 1. Fetch Feeds
+      const feedPosts = await feedService.getFeeds(1, 20);
       setPosts(feedPosts);
-      setGroups(publicGroups);
-      setEvents(featuredEvents);
+
+      // 2. Fetch Stories
+      const storiesList = await feedService.getStoryList(1, 15);
+      setStories(storiesList);
+
+      // 3. Fetch Tips
+      const tipData = await feedService.getDailyTipToday();
+      setDailyTip(tipData);
+
+      // 4. Fetch Featured Ongoing Events (using the dedicated /events/ongoing endpoint)
+      const ongoingResult = await feedService.getOngoingEvents(5, 0);
+      setEvents(ongoingResult.events);
+
+      // 5. Fetch Groups based on current filter
+      await fetchGroupsData(groupActiveTab);
+
     } catch (error) {
       console.error('❌ Failed to fetch feed/groups/events data:', error);
     } finally {
@@ -54,14 +104,30 @@ export const FeedScreen = () => {
     }
   };
 
+  const fetchGroupsData = async (filter: 'public' | 'user' | 'discover') => {
+    try {
+      const groupsList = await feedService.getGroups(filter, 1, 20);
+      setGroups(groupsList);
+    } catch (err) {
+      console.error('❌ Failed to fetch groups:', err);
+    }
+  };
+
   useEffect(() => {
     loadData();
   }, []);
 
+  // Update groups list when group tabs change
+  useEffect(() => {
+    if (currentTab === 1) {
+      fetchGroupsData(groupActiveTab);
+    }
+  }, [groupActiveTab, currentTab]);
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     loadData();
-  }, []);
+  }, [groupActiveTab, currentTab]);
 
   const handleLogout = async () => {
     setShowProfilePanel(false);
@@ -77,8 +143,8 @@ export const FeedScreen = () => {
     ]);
   };
 
-  // React to post (optimistic UI update, then backend toggle)
-  const handleLikePost = async (postId: number) => {
+  // Toggle reaction (like) on a post
+  const handleLikePost = async (postId: string | number) => {
     setPosts(prevPosts =>
       prevPosts.map(post => {
         if (post.id === postId) {
@@ -115,46 +181,52 @@ export const FeedScreen = () => {
     const groupId = group.id;
     const isJoined = group.user_membership && group.user_membership.status === 'active';
 
-    if (isJoined) {
-      // Leave group
-      const result = await feedService.leaveGroup(groupId);
-      if (result.success) {
-        Alert.alert('Left Group', `You have successfully left "${group.name}".`);
-        loadData(); // reload lists
-      } else {
-        Alert.alert('Error', result.message || 'Failed to leave group.');
-      }
-    } else {
-      // Join group
-      const result = await feedService.joinGroup(groupId);
-      if (result.success) {
-        if (result.data?.status === 'pending') {
-          Alert.alert('Request Sent', `Join request sent to private group "${group.name}".`);
+    setActionLoadingId(groupId);
+
+    try {
+      if (isJoined) {
+        const result = await feedService.leaveGroup(groupId);
+        if (result.success) {
+          Alert.alert('Left Group', `You have left "${group.name}".`);
+          loadData();
         } else {
-          Alert.alert('Success', `You joined group "${group.name}"!`);
+          Alert.alert('Error', result.message || 'Failed to leave group.');
         }
-        loadData(); // reload lists
       } else {
-        Alert.alert('Error', result.message || 'Failed to join group.');
+        const result = await feedService.joinGroup(groupId);
+        if (result.success) {
+          if (result.data?.status === 'pending') {
+            Alert.alert('Request Sent', `Join request sent to private group "${group.name}".`);
+          } else {
+            Alert.alert('Success', `You joined "${group.name}"!`);
+          }
+          loadData();
+        } else {
+          Alert.alert('Error', result.message || 'Failed to join group.');
+        }
       }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'An error occurred.');
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
-  // Prompt floating dialog to create a real feed post
+  // Create post prompt
   const handleCreateCTA = () => {
     Alert.prompt(
       'New Post',
-      'What eco action are you working on today? 🌱',
+      'Share your eco initiative with Ekenox! 🌱',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Post',
-          onPress: async (content) => {
+          onPress: async (content?: string) => {
             if (!content || !content.trim()) return;
             const result = await feedService.createFeed(content.trim());
             if (result.success) {
-              Alert.alert('Success', 'Your post is live!');
-              loadData(); // refresh posts
+              Alert.alert('Success', 'Posted successfully!');
+              loadData();
             } else {
               Alert.alert('Error', result.message || 'Failed to post.');
             }
@@ -165,48 +237,456 @@ export const FeedScreen = () => {
     );
   };
 
-  // Image URI resolver for feeds
-  const getPostImageUrl = (post: Feed) => {
-    if (post.media && post.media.length > 0) {
-      const mediaItem = post.media[0];
-      return `${ApiConfig.baseUrl}/uploads/feeds/images/${mediaItem.file_path}`;
-    }
-    return null;
+  // Copy shareable link to Clipboard
+  const handleCopyLink = (postId: string | number) => {
+    const link = `${ApiConfig.baseUrl}/feeds/${postId}`;
+    Clipboard.setString(link);
+    Alert.alert('Copied!', 'Link copied to clipboard successfully.');
   };
 
-  // Image URI resolver for events
-  const getEventImageUrl = (event: Event) => {
-    if (event.bannerImage) {
-      return `${ApiConfig.baseUrl}/uploads/events/${event.bannerImage}`;
-    }
-    return 'https://images.unsplash.com/photo-1582268611958-ebfd161ef9cf?w=300';
+  // Delete feed post
+  const handleDeletePost = (postId: string | number) => {
+    Alert.alert('Delete Post', 'Are you sure you want to delete this post permanently?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const success = await feedService.deleteFeed(postId);
+          if (success) {
+            Alert.alert('Deleted', 'Post deleted successfully.');
+            setPosts(prev => prev.filter(p => p.id !== postId));
+          } else {
+            Alert.alert('Error', 'Failed to delete post.');
+          }
+        },
+      },
+    ]);
   };
 
-  const renderStoryItem = ({ item }: { item: { name: string; avatar: string; isUser?: boolean } }) => (
-    <View style={styles.storyItem}>
-      <View style={[styles.storyBorder, item.isUser ? styles.storyUserBorder : null]}>
-        <Image source={{ uri: item.avatar }} style={styles.storyAvatar} />
-        {item.isUser && (
-          <View style={styles.storyAddBadge}>
-            <Ionicons name="add" size={12} color="white" />
+  // Edit feed post
+  const handleEditPost = (post: Feed) => {
+    Alert.prompt(
+      'Edit Post',
+      'Update your eco action text:',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Update',
+          onPress: async (newText?: string) => {
+            if (!newText || !newText.trim()) return;
+            const success = await feedService.updateFeed(post.id, newText.trim());
+            if (success) {
+              Alert.alert('Updated', 'Post updated successfully!');
+              setPosts(prev => prev.map(p => p.id === post.id ? { ...p, content: newText.trim(), is_edited: true } : p));
+            } else {
+              Alert.alert('Error', 'Failed to update post.');
+            }
+          },
+        },
+      ],
+      'plain-text',
+      post.content
+    );
+  };
+
+  // Report feed post
+  const handleReportPost = (postId: string | number) => {
+    const reasons = [
+      { text: 'Spam or unwanted', reason: 'spam' },
+      { text: 'Harassment or abuse', reason: 'harassment' },
+      { text: 'Inappropriate content', reason: 'inappropriate' },
+      { text: 'Illegal content', reason: 'illigal_content' },
+      { text: 'Other reason', reason: 'other' },
+    ];
+
+    Alert.alert(
+      'Report Post',
+      'Select a reason for reporting this post:',
+      reasons.map(r => ({
+        text: r.text,
+        onPress: async () => {
+          const success = await feedService.reportFeed(postId, r.reason);
+          if (success) {
+            Alert.alert('Thank You', 'Post reported successfully. Our moderators will review it.');
+          } else {
+            Alert.alert('Error', 'Failed to submit report.');
+          }
+        },
+      }))
+    );
+  };
+
+  // Options Menu sheet triggers
+  const handleOpenPostOptions = (post: Feed) => {
+    const isMine = post.user?.id === user?.id || post.author?.id === user?.id;
+
+    const options: any[] = [];
+    if (isMine) {
+      options.push({ text: 'Edit Post', onPress: () => handleEditPost(post) });
+      options.push({ text: 'Delete Post', style: 'destructive', onPress: () => handleDeletePost(post.id) });
+    } else {
+      options.push({ text: 'Report Post', onPress: () => handleReportPost(post.id) });
+    }
+    options.push({ text: 'Copy Link', onPress: () => handleCopyLink(post.id) });
+    options.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Post Options', 'Select an action:', options);
+  };
+
+  // Vote on poll post
+  const handleVotePoll = async (postId: string | number, optionIndex: number) => {
+    const result = await feedService.votePoll(postId, optionIndex);
+    if (result.success) {
+      Alert.alert('Success', 'Vote registered successfully.');
+
+      // Update state with new results
+      setPosts(prev =>
+        prev.map(post => {
+          if (post.id === postId) {
+            return {
+              ...post,
+              poll_results: result.pollResults,
+              user_votes: [optionIndex], // local user voted choice
+            };
+          }
+          return post;
+        })
+      );
+    } else {
+      Alert.alert('Failed', result.message || 'Failed to submit vote.');
+    }
+  };
+
+  // Compute Ongoing status tags for Events
+  const getEventTag = (event: Event) => {
+    const now = new Date().getTime();
+    const start = new Date(event.startTime).getTime();
+    const end = new Date(event.endTime).getTime();
+
+    if (now >= start && now <= end) {
+      return { label: 'Ongoing', color: '#10B981', bg: '#D1FAE5' };
+    } else if (now < start) {
+      return { label: 'Upcoming', color: '#0D9488', bg: '#CCFAF6' };
+    } else {
+      return { label: 'Past', color: '#6B7280', bg: '#F3F4F6' };
+    }
+  };
+
+  const formatEventDates = (startStr: string, endStr: string) => {
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+    return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}`;
+  };
+
+  // Stories Slideshow Auto-advance logic
+  const handleOpenStories = (index: number) => {
+    setSelectedStoryIndex(index);
+    setCurrentSlideIndex(0);
+    setStoryModalVisible(true);
+  };
+
+  const closeStories = () => {
+    if (storyTimer.current) clearTimeout(storyTimer.current);
+    setStoryModalVisible(false);
+    setSelectedStoryIndex(null);
+    setCurrentSlideIndex(0);
+  };
+
+  const handleNextSlide = () => {
+    if (selectedStoryIndex === null) return;
+    const slides = stories[selectedStoryIndex]?.slides || [];
+    if (currentSlideIndex < slides.length - 1) {
+      setCurrentSlideIndex(prev => prev + 1);
+    } else {
+      if (selectedStoryIndex < stories.length - 1) {
+        setSelectedStoryIndex(prev => prev! + 1);
+        setCurrentSlideIndex(0);
+      } else {
+        closeStories();
+      }
+    }
+  };
+
+  // Advance to next slide when video plays to the end
+  useEventListener(player, 'playToEnd', () => {
+    handleNextSlide();
+  });
+
+  // Manage loading indicator state on player status changes
+  useEventListener(player, 'statusChange', ({ status }) => {
+    setStoryVideoLoading(status === 'loading');
+  });
+
+  // Sync the player source dynamically with the active slide mediaUrl
+  useEffect(() => {
+    if (!storyModalVisible || selectedStoryIndex === null) {
+      player.pause();
+      return;
+    }
+
+    const activeStory = stories[selectedStoryIndex];
+    if (!activeStory) return;
+
+    const slides = activeStory.slides || [];
+    const activeSlide = slides[currentSlideIndex];
+
+    const isVideo = activeSlide
+      ? activeSlide.media_type === 'video' || isVideoUrl(activeSlide.media_url || activeSlide.mediaUrl)
+      : isVideoUrl(activeStory.video_url || activeStory.videoUrl);
+
+    if (isVideo) {
+      const mediaUrl = resolveMediaUrl(
+        activeSlide?.media_url ||
+        activeSlide?.mediaUrl ||
+        activeSlide?.url ||
+        activeStory?.video_url ||
+        activeStory?.videoUrl ||
+        activeStory?.thumbnail_url ||
+        activeStory?.thumbnailUrl
+      );
+
+      if (mediaUrl) {
+        player.replaceAsync(mediaUrl).then(() => {
+          player.play();
+        });
+      }
+    } else {
+      player.pause();
+    }
+  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex]);
+
+  const handlePrevSlide = () => {
+    if (selectedStoryIndex === null) return;
+    if (currentSlideIndex > 0) {
+      setCurrentSlideIndex(prev => prev - 1);
+    } else {
+      if (selectedStoryIndex > 0) {
+        const prevStoryIdx = selectedStoryIndex - 1;
+        setSelectedStoryIndex(prevStoryIdx);
+        const prevSlidesCount = stories[prevStoryIdx]?.slides?.length || 1;
+        setCurrentSlideIndex(prevSlidesCount - 1);
+      }
+    }
+  };
+
+  const isVideoUrl = (url?: string) => {
+    if (!url) return false;
+    const lowercase = url.toLowerCase();
+    return (
+      lowercase.endsWith('.mp4') ||
+      lowercase.endsWith('.mov') ||
+      lowercase.endsWith('.avi') ||
+      lowercase.endsWith('.mkv') ||
+      lowercase.endsWith('.webm') ||
+      lowercase.endsWith('.3gp') ||
+      lowercase.includes('/videos/')
+    );
+  };
+
+  // Reactive Stories slideshow controller
+  useEffect(() => {
+    if (!storyModalVisible || selectedStoryIndex === null) {
+      if (storyTimer.current) clearTimeout(storyTimer.current);
+      return;
+    }
+
+    const activeStory = stories[selectedStoryIndex];
+    if (!activeStory) return;
+
+    const slides = activeStory.slides || [];
+    const activeSlide = slides[currentSlideIndex];
+    const isVideo = activeSlide
+      ? activeSlide.media_type === 'video' || isVideoUrl(activeSlide.media_url || activeSlide.mediaUrl)
+      : isVideoUrl(activeStory.video_url || activeStory.videoUrl);
+
+    if (storyTimer.current) clearTimeout(storyTimer.current);
+
+    if (!isVideo) {
+      // Image slide auto-advance after 4 seconds
+      storyTimer.current = setTimeout(() => {
+        handleNextSlide();
+      }, 4000);
+    } else {
+      // Safe video safety fallback of 35 seconds to prevent cuts on longer videos
+      storyTimer.current = setTimeout(() => {
+        handleNextSlide();
+      }, 35000);
+    }
+
+    return () => {
+      if (storyTimer.current) clearTimeout(storyTimer.current);
+    };
+  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex]);
+
+
+
+  // Render Horizontal Story Cards matching Flutter design
+  const renderStoryItem = ({ item, index }: { item: any; index: number }) => {
+    const userAvatar = item.user?.profile_image || item.user?.avatar_url || item.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
+    const thumbnailUrl = item.thumbnail_url || item.thumbnailUrl || (item.slides?.[0]?.media_url || item.slides?.[0]?.mediaUrl);
+    const username = item.user?.full_name || item.username || 'Champion';
+
+    return (
+      <TouchableOpacity style={styles.storyCard} onPress={() => handleOpenStories(index)} activeOpacity={0.85}>
+        {thumbnailUrl ? (
+          <Image source={{ uri: resolveMediaUrl(thumbnailUrl) }} style={styles.storyCardBg} />
+        ) : (
+          <View style={[styles.storyCardBg, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
+            <Ionicons name="play-circle" size={40} color={AppColors.primary} />
           </View>
         )}
+        <View style={styles.storyCardOverlay} />
+
+        <View style={styles.storyCardAvatarRing}>
+          <Image source={{ uri: resolveMediaUrl(userAvatar) }} style={styles.storyCardAvatar} />
+        </View>
+
+        <Text style={styles.storyCardName} numberOfLines={2}>
+          {username}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  // Render single post item
+  const renderPostCard = (post: Feed) => {
+    const authorName = post.user?.full_name || post.author?.full_name || 'Anonymous';
+    const authorImage = post.user?.profile_image || post.user?.avatar_url || post.author?.profile_image;
+    const isLiked = post.is_liked || post.user_reacted;
+    const reactions = post.stats?.reactions ?? post.likes_count ?? 0;
+    const comments = post.stats?.comments ?? post.comments_count ?? 0;
+
+    return (
+      <View key={post.id} style={styles.postCard}>
+        {/* Author details */}
+        <View style={styles.postAuthorRow}>
+          {authorImage ? (
+            <Image source={{ uri: resolveMediaUrl(authorImage) }} style={styles.postAvatar} />
+          ) : (
+            <View style={[styles.postAvatar, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
+              <Text style={{ color: AppColors.primary, fontWeight: 'bold', fontSize: 13 }}>
+                {authorName.substring(0, 2).toUpperCase()}
+              </Text>
+            </View>
+          )}
+          <View style={styles.postAuthorDetails}>
+            <Text style={styles.postAuthorName}>{authorName}</Text>
+            <Text style={styles.postTime}>
+              {new Date(post.created_at).toLocaleDateString()} {post.is_edited && '• Edited'}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.postOptionBtn} onPress={() => handleOpenPostOptions(post)}>
+            <Ionicons name="ellipsis-horizontal" size={20} color={AppColors.textMedium} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Content text */}
+        <Text style={styles.postContent}>{post.content}</Text>
+
+        {/* Multi-images / Single image slidable swiper */}
+        {post.media && post.media.length > 0 && (
+          post.media.length === 1 ? (
+            <Image source={{ uri: resolveMediaUrl(post.media[0].url) }} style={styles.postImage} />
+          ) : (
+            <View style={styles.carouselContainer}>
+              <FlatList
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                data={post.media}
+                keyExtractor={m => m.id.toString()}
+                renderItem={({ item }) => (
+                  <Image source={{ uri: resolveMediaUrl(item.url) }} style={styles.postCarouselImage} />
+                )}
+              />
+              <View style={styles.carouselIndicator}>
+                <Ionicons name="images" size={12} color="white" />
+                <Text style={styles.carouselIndicatorText}>Swipe to view ({post.media.length})</Text>
+              </View>
+            </View>
+          )
+        )}
+
+        {/* Dynamic Poll Card rendering */}
+        {post.post_type === 'poll' && post.poll_options && (
+          <View style={styles.pollCard}>
+            <Text style={styles.pollTitle}>📊 Ekenox Poll</Text>
+
+            {post.poll_options.map((option, idx) => {
+              // Calculate votes statistics
+              const results = post.poll_results || {};
+              const votesCount = results[idx.toString()] ?? results[idx] ?? 0;
+
+              // Sum all options
+              const totalVotes = Object.values(results).reduce((a: any, b: any) => Number(a) + Number(b), 0) as number;
+              const percentage = totalVotes > 0 ? Math.round((votesCount / totalVotes) * 100) : 0;
+              const hasVoted = post.user_votes && post.user_votes.includes(idx);
+
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={[
+                    styles.pollOptionBtn,
+                    hasVoted ? styles.pollOptionVoted : null,
+                  ]}
+                  onPress={() => handleVotePoll(post.id, idx)}
+                  disabled={!!(post.user_votes && post.user_votes.length > 0)}
+                >
+                  <View style={[styles.pollProgressFill, { width: `${percentage}%` }]} />
+                  <View style={styles.pollOptionContent}>
+                    <Text style={[styles.pollOptionText, hasVoted ? styles.pollOptionTextVoted : null]}>
+                      {option}
+                    </Text>
+                    {post.user_votes && post.user_votes.length > 0 && (
+                      <Text style={styles.pollPercentText}>{percentage}% ({votesCount})</Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Buttons footer reactions */}
+        <View style={styles.postFooter}>
+          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleLikePost(post.id)}>
+            <Ionicons
+              name={isLiked ? 'heart' : 'heart-outline'}
+              size={20}
+              color={isLiked ? AppColors.error : AppColors.textMedium}
+            />
+            <Text style={[styles.postFooterText, isLiked ? styles.likedText : null]}>
+              {reactions}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.postFooterBtn}
+            onPress={() => Alert.alert('Comments', 'Comments are available inside group or event details screens.')}
+          >
+            <Ionicons name="chatbubble-outline" size={19} color={AppColors.textMedium} />
+            <Text style={styles.postFooterText}>{comments}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleCopyLink(post.id)}>
+            <Ionicons name="share-social-outline" size={19} color={AppColors.textMedium} />
+          </TouchableOpacity>
+        </View>
       </View>
-      <Text style={styles.storyName} numberOfLines={1}>
-        {item.name}
-      </Text>
-    </View>
-  );
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      {/* Top Navbar */}
-      <View style={styles.header}>
+      {/* Top Header Navbar */}
+      <View style={[styles.header, { paddingTop: insets.top, height: 60 + insets.top }]}>
         <TouchableOpacity style={styles.headerAvatarContainer} onPress={() => setShowProfilePanel(true)}>
           {user?.profileImage ? (
-            <Image source={{ uri: user.profileImage }} style={styles.headerAvatar} />
+            <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.headerAvatar} />
           ) : (
             <View style={styles.headerAvatarPlaceholder}>
               <Text style={styles.avatarText}>
@@ -219,16 +699,16 @@ export const FeedScreen = () => {
         <Text style={styles.headerTitle}>eKeNox</Text>
 
         <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Messages', 'Chat & messaging inbox coming soon.')}>
+          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Messages', 'Secure chat rooms are synced in Ekenox Chat.')}>
             <Ionicons name="chatbubbles-outline" size={22} color={AppColors.textDark} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Notifications', 'Notification center coming soon.')}>
+          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Notifications', 'Notification logs synced in profile metrics.')}>
             <Ionicons name="notifications-outline" size={22} color={AppColors.textDark} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Main Tab Bar */}
+      {/* Navigation Main Tab Bar */}
       <View style={styles.tabBar}>
         <TouchableOpacity
           style={[styles.tabBtn, currentTab === 0 ? styles.tabBtnActive : null]}
@@ -247,12 +727,11 @@ export const FeedScreen = () => {
       {isLoading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator color={AppColors.primary} size="large" />
-          <Text style={styles.loadingText}>Fetching live eco actions...</Text>
+          <Text style={styles.loadingText}>Loading Ekenox ecosystems...</Text>
         </View>
       ) : (
-        /* Main Content Area */
+        /* Main tabs content list scroll */
         currentTab === 0 ? (
-          // Feed Scroll
           <ScrollView
             style={styles.content}
             showsVerticalScrollIndicator={false}
@@ -260,154 +739,125 @@ export const FeedScreen = () => {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />
             }
           >
-            {/* Stories Section */}
-            <View style={styles.storiesContainer}>
-              <FlatList
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                data={[
-                  { name: 'My Story', avatar: user?.profileImage || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', isUser: true },
-                  { name: 'Sarah', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150' },
-                  { name: 'Nature Club', avatar: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=150' },
-                  { name: 'David', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150' },
-                  { name: 'Eco Team', avatar: 'https://images.unsplash.com/photo-1506869640319-fe1a24fd76dc?w=150' },
-                  { name: 'Elena', avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150' },
-                ]}
-                renderItem={renderStoryItem}
-                keyExtractor={(item, index) => index.toString()}
-                contentContainerStyle={{ paddingHorizontal: 16 }}
-              />
-            </View>
+            {/* Horizontal Stories list sequence */}
+            {stories.length > 0 && (
+              <View style={styles.storiesContainer}>
+                <FlatList
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  data={stories}
+                  renderItem={renderStoryItem}
+                  keyExtractor={item => item.id.toString()}
+                  contentContainerStyle={{ paddingHorizontal: 16 }}
+                />
+              </View>
+            )}
 
-            {/* Daily Tip (Dismissible) */}
-            {showTip && (
+            {/* Expandable Daily Tip Card */}
+            {showTip && dailyTip && (
               <View style={styles.tipCard}>
                 <View style={styles.tipHeader}>
                   <View style={styles.tipTitleRow}>
-                    <Ionicons name="bulb" size={20} color={AppColors.accent} />
-                    <Text style={styles.tipTitle}>Daily Green Tip</Text>
+                    <Ionicons name="bulb" size={20} color="#0D9488" />
+                    <Text style={styles.tipTitle}>{dailyTip.title || 'Daily Green Tip'}</Text>
                   </View>
                   <TouchableOpacity onPress={() => setShowTip(false)}>
                     <Ionicons name="close" size={20} color={AppColors.textMedium} />
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.tipText}>
-                  Use a reusable water bottle today to reduce single-use plastic waste! Every small habit contributes to saving our ocean ecosystems. 🌱🌊
-                </Text>
+                <Text style={styles.tipText}>{dailyTip.fun_text}</Text>
+
+                {tipExpanded && (
+                  <View style={styles.tipExpandContent}>
+                    <View style={styles.tipInfoRow}>
+                      <Ionicons name="leaf-outline" size={14} color="#0D9488" />
+                      <Text style={styles.tipInfoText}><Text style={{ fontWeight: 'bold' }}>Action: </Text>{dailyTip.action}</Text>
+                    </View>
+                    <View style={styles.tipInfoRow}>
+                      <Ionicons name="analytics-outline" size={14} color="#0D9488" />
+                      <Text style={styles.tipInfoText}><Text style={{ fontWeight: 'bold' }}>Impact: </Text>{dailyTip.impact}</Text>
+                    </View>
+                    {dailyTip.estimated_savings && (
+                      <View style={styles.tipInfoRow}>
+                        <Ionicons name="wallet-outline" size={14} color="#0D9488" />
+                        <Text style={styles.tipInfoText}>
+                          <Text style={{ fontWeight: 'bold' }}>Savings: </Text>
+                          {typeof dailyTip.estimated_savings === 'object'
+                            ? `${dailyTip.estimated_savings.value} ${dailyTip.estimated_savings.unit}`
+                            : dailyTip.estimated_savings}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                <TouchableOpacity style={styles.learnMoreBtn} onPress={() => setTipExpanded(!tipExpanded)}>
+                  <Text style={styles.learnMoreText}>{tipExpanded ? 'Show less' : 'Learn more...'}</Text>
+                </TouchableOpacity>
               </View>
             )}
 
-            {/* Featured Events */}
+            {/* Featured Events Carousel - Limited to 5 items */}
             {events.length > 0 && (
               <View style={styles.eventsSection}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Featured Events</Text>
-                  <TouchableOpacity onPress={() => Alert.alert('Events', 'Tap any event to view details!')}>
+                  <TouchableOpacity onPress={() => navigation.navigate('Events')}>
                     <Text style={styles.sectionAction}>See All</Text>
                   </TouchableOpacity>
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.eventsScroll}>
-                  {events.map(event => (
-                    <TouchableOpacity
-                      key={event.id}
-                      style={styles.eventCard}
-                      onPress={() => Alert.alert(event.title, `${event.description || 'Join us for this eco activity!'}\n\n📍 Location: ${event.location}`)}
-                    >
-                      <Image source={{ uri: getEventImageUrl(event) }} style={styles.eventImage} />
-                      <View style={styles.eventContent}>
-                        <Text style={styles.eventCardTitle} numberOfLines={1}>{event.title}</Text>
-                        <View style={styles.eventInfoRow}>
-                          <Ionicons name="calendar-outline" size={13} color={AppColors.textMedium} />
-                          <Text style={styles.eventInfoText}>{new Date(event.startTime).toLocaleDateString()}</Text>
+                  {events.slice(0, 5).map(event => {
+                    const status = getEventTag(event);
+                    return (
+                      <TouchableOpacity
+                        key={event.id}
+                        style={styles.eventCard}
+                        onPress={() => navigation.navigate('EventDetail' as never, { eventId: event.id } as never)}
+                      >
+                        <Image source={{ uri: resolveMediaUrl(event.banner_image || event.bannerImage) }} style={styles.eventImage} />
+                        <View style={[styles.eventTagBadge, { backgroundColor: status.bg }]}>
+                          <Text style={[styles.eventTagText, { color: status.color }]}>{status.label}</Text>
                         </View>
-                        <View style={styles.eventInfoRow}>
-                          <Ionicons name="location-outline" size={13} color={AppColors.textMedium} />
-                          <Text style={styles.eventInfoText} numberOfLines={1}>{event.location}</Text>
+                        <View style={styles.eventContent}>
+                          <Text style={styles.eventCardTitle} numberOfLines={1}>{event.title}</Text>
+                          <View style={styles.eventInfoRow}>
+                            <Ionicons name="calendar-outline" size={13} color={AppColors.textMedium} />
+                            <Text style={styles.eventInfoText}>{formatEventDates(event.startTime, event.endTime)}</Text>
+                          </View>
+                          <View style={styles.eventInfoRow}>
+                            <Ionicons name="location-outline" size={13} color={AppColors.textMedium} />
+                            <Text style={styles.eventInfoText} numberOfLines={1}>{event.location}</Text>
+                          </View>
                         </View>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </ScrollView>
               </View>
             )}
 
-            {/* Feed List Title */}
-            <View style={styles.feedHeaderRow}>
-              <Text style={styles.sectionTitle}>Recent Activities</Text>
-            </View>
+            {/* Recent Feeds List Title */}
+            {/* <View style={styles.feedHeaderRow}>
+              <Text style={styles.sectionTitle}>Recent Eco Actions</Text>
+            </View> */}
 
-            {/* Posts List */}
+            {/* Posts Cards list */}
             <View style={styles.postsList}>
               {posts.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="leaf-outline" size={48} color={AppColors.textLight} />
-                  <Text style={styles.emptyText}>No live posts yet. Be the first to share your eco action!</Text>
+                  <Text style={styles.emptyText}>No live posts yet. Share your first eco action!</Text>
                 </View>
               ) : (
-                posts.map(post => {
-                  const postImage = getPostImageUrl(post);
-                  return (
-                    <View key={post.id} style={styles.postCard}>
-                      {/* Author Info */}
-                      <View style={styles.postAuthorRow}>
-                        {post.author?.profile_image ? (
-                          <Image source={{ uri: post.author.profile_image }} style={styles.postAvatar} />
-                        ) : (
-                          <View style={[styles.postAvatar, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
-                            <Text style={{ color: AppColors.primary, fontWeight: 'bold', fontSize: 13 }}>
-                              {(post.author?.full_name || 'Anonymous').substring(0, 2).toUpperCase()}
-                            </Text>
-                          </View>
-                        )}
-                        <View style={styles.postAuthorDetails}>
-                          <Text style={styles.postAuthorName}>{post.author?.full_name || 'Anonymous'}</Text>
-                          <Text style={styles.postTime}>{new Date(post.created_at).toLocaleDateString()}</Text>
-                        </View>
-                        <TouchableOpacity style={styles.postOptionBtn}>
-                          <Ionicons name="ellipsis-horizontal" size={20} color={AppColors.textMedium} />
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Content */}
-                      <Text style={styles.postContent}>{post.content}</Text>
-
-                      {postImage && (
-                        <Image source={{ uri: postImage }} style={styles.postImage} />
-                      )}
-
-                      {/* Footer Buttons */}
-                      <View style={styles.postFooter}>
-                        <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleLikePost(post.id)}>
-                          <Ionicons
-                            name={post.is_liked ? 'heart' : 'heart-outline'}
-                            size={20}
-                            color={post.is_liked ? AppColors.error : AppColors.textMedium}
-                          />
-                          <Text style={[styles.postFooterText, post.is_liked ? styles.likedText : null]}>
-                            {post.likes_count}
-                          </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.postFooterBtn} onPress={() => Alert.alert('Comments', 'Comments features coming in next build.')}>
-                          <Ionicons name="chatbubble-outline" size={19} color={AppColors.textMedium} />
-                          <Text style={styles.postFooterText}>{post.comments_count}</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.postFooterBtn} onPress={() => Alert.alert('Share', 'System share tray not loaded.')}>
-                          <Ionicons name="share-social-outline" size={19} color={AppColors.textMedium} />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })
+                posts.map(post => renderPostCard(post))
               )}
             </View>
 
-            {/* Bottom spacing */}
             <View style={{ height: 100 }} />
           </ScrollView>
         ) : (
-          // Groups Tab List
+          /* Groups tab explorer with Public, My Groups, Discover pills */
           <ScrollView
             style={styles.content}
             showsVerticalScrollIndicator={false}
@@ -415,20 +865,47 @@ export const FeedScreen = () => {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />
             }
           >
+            {/* Groups exploration header */}
             <View style={styles.groupsHeaderRow}>
-              <Text style={styles.sectionTitle}>Explore Eco Groups</Text>
-              <Text style={styles.groupsSubtitle}>Connect with local champions working in your field.</Text>
+              <Text style={styles.sectionTitle}>Explore Groups</Text>
+              <Text style={styles.groupsSubtitle}>Connect with Ekenox eco champions around the world.</Text>
             </View>
 
+            {/* Pill-filters Tab switcher */}
+            <View style={styles.pillsRow}>
+              <TouchableOpacity
+                style={[styles.pillBtn, groupActiveTab === 'public' ? styles.pillBtnActive : null]}
+                onPress={() => setGroupActiveTab('public')}
+              >
+                <Text style={[styles.pillText, groupActiveTab === 'public' ? styles.pillTextActive : null]}>Public</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pillBtn, groupActiveTab === 'user' ? styles.pillBtnActive : null]}
+                onPress={() => setGroupActiveTab('user')}
+              >
+                <Text style={[styles.pillText, groupActiveTab === 'user' ? styles.pillTextActive : null]}>My Groups</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.pillBtn, groupActiveTab === 'discover' ? styles.pillBtnActive : null]}
+                onPress={() => setGroupActiveTab('discover')}
+              >
+                <Text style={[styles.pillText, groupActiveTab === 'discover' ? styles.pillTextActive : null]}>Discover</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Groups list */}
             <View style={styles.groupsList}>
               {groups.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="people-outline" size={48} color={AppColors.textLight} />
-                  <Text style={styles.emptyText}>No groups available right now.</Text>
+                  <Text style={styles.emptyText}>No groups available under this filter.</Text>
                 </View>
               ) : (
                 groups.map(group => {
-                  const isJoined = group.user_membership && group.user_membership.status === 'active';
+                  const isJoined = !!(group.user_membership && group.user_membership.status === 'active');
+                  const isPending = !!(group.user_membership && group.user_membership.status === 'pending');
+                  const isActionLoading = actionLoadingId === group.id;
+
                   return (
                     <TouchableOpacity
                       key={group.id}
@@ -456,15 +933,20 @@ export const FeedScreen = () => {
                           isJoined ? styles.groupActionBtnJoined : null,
                         ]}
                         onPress={() => handleToggleGroupJoin(group)}
+                        disabled={isActionLoading || isPending}
                       >
-                        <Text
-                          style={[
-                            styles.groupActionText,
-                            isJoined ? styles.groupActionTextJoined : null,
-                          ]}
-                        >
-                          {isJoined ? 'Joined' : 'Join Group'}
-                        </Text>
+                        {isActionLoading ? (
+                          <ActivityIndicator color={isJoined ? AppColors.textDark : 'white'} size="small" />
+                        ) : (
+                          <Text
+                            style={[
+                              styles.groupActionText,
+                              isJoined ? styles.groupActionTextJoined : null,
+                            ]}
+                          >
+                            {isJoined ? 'Joined' : isPending ? 'Pending' : 'Join Group'}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     </TouchableOpacity>
                   );
@@ -472,18 +954,130 @@ export const FeedScreen = () => {
               )}
             </View>
 
-            {/* Bottom spacing */}
             <View style={{ height: 100 }} />
           </ScrollView>
         )
       )}
 
-      {/* Floating Action Button */}
+      {/* Floating Action Button for post creation */}
       <TouchableOpacity style={styles.fab} onPress={handleCreateCTA}>
         <Ionicons name="add" size={30} color="white" />
       </TouchableOpacity>
 
-      {/* Sidebar / Profile Panel Overlay */}
+      {/* Stories Slideshow Fullscreen Modal Viewer */}
+      {storyModalVisible && selectedStoryIndex !== null && stories[selectedStoryIndex] && (
+        <Modal
+          visible={storyModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={closeStories}
+        >
+          <SafeAreaView style={styles.storyViewerContainer}>
+            <StatusBar barStyle="light-content" backgroundColor="#000000" />
+
+            {/* Story Image / Video Background */}
+            <View style={styles.storyViewerImageWrapper}>
+              {(() => {
+                const activeStory = stories[selectedStoryIndex];
+                const slides = activeStory?.slides || [];
+                const slide = slides[currentSlideIndex];
+                const mediaUrl = resolveMediaUrl(
+                  slide?.media_url ||
+                  slide?.mediaUrl ||
+                  slide?.url ||
+                  activeStory?.video_url ||
+                  activeStory?.videoUrl ||
+                  activeStory?.thumbnail_url ||
+                  activeStory?.thumbnailUrl
+                );
+                const isVideo = slide
+                  ? slide.media_type === 'video' || isVideoUrl(slide.media_url || slide.mediaUrl)
+                  : isVideoUrl(activeStory?.video_url || activeStory?.videoUrl);
+
+                if (isVideo) {
+                  return (
+                    <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                      <VideoView
+                        player={player}
+                        style={styles.storyViewerImage}
+                        contentFit="contain"
+                        nativeControls={false}
+                      />
+                      {storyVideoLoading && (
+                        <ActivityIndicator style={{ position: 'absolute' }} color="white" size="large" />
+                      )}
+                    </View>
+                  );
+                } else {
+                  return (
+                    <Image
+                      source={{ uri: mediaUrl }}
+                      style={styles.storyViewerImage}
+                      resizeMode="contain"
+                    />
+                  );
+                }
+              })()}
+
+              {/* Touch split navigation controls */}
+              <View style={styles.storyViewerGestureOverlay}>
+                <TouchableOpacity style={{ flex: 1 }} onPress={handlePrevSlide} />
+                <TouchableOpacity style={{ flex: 1 }} onPress={handleNextSlide} />
+              </View>
+            </View>
+
+            {/* Slides Progress Indicators at the Top */}
+            <View style={styles.storyProgressContainer}>
+              {(stories[selectedStoryIndex]?.slides || [1]).map((_: any, idx: number) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.storyProgressBar,
+                    {
+                      backgroundColor: idx === currentSlideIndex
+                        ? 'white'
+                        : idx < currentSlideIndex
+                          ? AppColors.primary
+                          : 'rgba(255, 255, 255, 0.3)'
+                    }
+                  ]}
+                />
+              ))}
+            </View>
+
+            {/* Story Viewer Header: User details & Close Button */}
+            <View style={styles.storyViewerHeader}>
+              <Image
+                source={{
+                  uri: resolveMediaUrl(
+                    stories[selectedStoryIndex]?.userAvatar ||
+                    stories[selectedStoryIndex]?.user?.profile_image ||
+                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
+                  )
+                }}
+                style={styles.storyViewerAvatar}
+              />
+              <Text style={styles.storyViewerName}>
+                {stories[selectedStoryIndex]?.username || stories[selectedStoryIndex]?.user?.full_name || 'Champion'}
+              </Text>
+              <TouchableOpacity style={styles.storyViewerCloseBtn} onPress={closeStories}>
+                <Ionicons name="close" size={26} color="white" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Slide title / description caption at the bottom */}
+            <View style={styles.storyViewerFooter}>
+              <Text style={styles.storyViewerTitle}>
+                {stories[selectedStoryIndex]?.slides?.[currentSlideIndex]?.alt_text ||
+                  stories[selectedStoryIndex]?.slides?.[currentSlideIndex]?.altText ||
+                  stories[selectedStoryIndex]?.title || 'Shared an Eco Initiative'}
+              </Text>
+            </View>
+          </SafeAreaView>
+        </Modal>
+      )}
+
+      {/* Profile Panel drawer overlay */}
       {showProfilePanel && (
         <View style={styles.overlay}>
           <TouchableOpacity style={styles.overlayCloseArea} onPress={() => setShowProfilePanel(false)} />
@@ -497,7 +1091,7 @@ export const FeedScreen = () => {
 
             <View style={styles.profilePanelCard}>
               {user?.profileImage ? (
-                <Image source={{ uri: user.profileImage }} style={styles.panelAvatar} />
+                <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.panelAvatar} />
               ) : (
                 <View style={styles.panelAvatarPlaceholder}>
                   <Text style={styles.panelAvatarText}>
@@ -508,7 +1102,7 @@ export const FeedScreen = () => {
               <Text style={styles.panelName}>{user?.fullName || 'Eco Champion'}</Text>
               <Text style={styles.panelEmail}>{user?.email}</Text>
 
-              {/* Stats Grid */}
+              {/* Level & stats metrics */}
               <View style={styles.panelStatsContainer}>
                 <View style={styles.panelStatBox}>
                   <Text style={styles.panelStatVal}>{user?.level ?? 1}</Text>
@@ -530,12 +1124,10 @@ export const FeedScreen = () => {
                 <Ionicons name="ribbon-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>My Impact Badges</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.panelMenuItem} onPress={() => Alert.alert('My Actions', 'Log of eco action initiatives.')}>
                 <Ionicons name="checkmark-done-circle-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>Logged Eco Actions</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.panelMenuItem} onPress={() => Alert.alert('Settings', 'App configurations & keys.')}>
                 <Ionicons name="settings-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>Settings & Privacy</Text>
@@ -549,7 +1141,7 @@ export const FeedScreen = () => {
           </View>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -632,52 +1224,62 @@ const styles = StyleSheet.create({
   },
   storiesContainer: {
     backgroundColor: 'white',
-    paddingVertical: 14,
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
-  storyItem: {
-    alignItems: 'center',
-    marginRight: 18,
-    width: 65,
-  },
-  storyBorder: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 2,
-    borderColor: AppColors.primaryLight,
-    padding: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
+  storyCard: {
+    width: 110,
+    height: 170,
+    borderRadius: 14,
+    marginRight: 12,
+    overflow: 'hidden',
     position: 'relative',
-    marginBottom: 6,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
   },
-  storyUserBorder: {
-    borderColor: '#D1D5DB',
-  },
-  storyAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-  },
-  storyAddBadge: {
+  storyCardBg: {
+    width: '100%',
+    height: '100%',
     position: 'absolute',
-    bottom: -2,
-    right: -2,
-    backgroundColor: AppColors.primary,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+  },
+  storyCardOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  },
+  storyCardAvatarRing: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: AppColors.primary,
+    padding: 1,
+    backgroundColor: 'white',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'white',
   },
-  storyName: {
-    fontSize: 11,
-    color: AppColors.textDark,
-    textAlign: 'center',
+  storyCardAvatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 15,
+  },
+  storyCardName: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    right: 10,
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: 'white',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   tipCard: {
     backgroundColor: '#EEFDFC',
@@ -707,6 +1309,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0F766E',
     lineHeight: 18,
+  },
+  tipExpandContent: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#CCFAF6',
+  },
+  tipInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  tipInfoText: {
+    fontSize: 12,
+    color: '#0F766E',
+    marginLeft: 8,
+    flex: 1,
+  },
+  learnMoreBtn: {
+    marginTop: 10,
+  },
+  learnMoreText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0D9488',
   },
   eventsSection: {
     marginVertical: 8,
@@ -740,10 +1367,24 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#ECECEC',
+    position: 'relative',
   },
   eventImage: {
     width: '100%',
     height: 100,
+  },
+  eventTagBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  eventTagText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
   },
   eventContent: {
     padding: 10,
@@ -763,6 +1404,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: AppColors.textMedium,
     marginLeft: 4,
+    flex: 1,
   },
   feedHeaderRow: {
     paddingHorizontal: 16,
@@ -779,10 +1421,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderWidth: 1,
     borderColor: '#ECECEC',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.02,
-    shadowRadius: 4,
     elevation: 1,
   },
   postAuthorRow: {
@@ -824,6 +1462,90 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 12,
   },
+  carouselContainer: {
+    position: 'relative',
+    height: 180,
+    width: '100%',
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  postCarouselImage: {
+    width: SCREEN_WIDTH - 66, // matching post padding
+    height: 180,
+  },
+  carouselIndicator: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  carouselIndicatorText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+    marginLeft: 4,
+  },
+  pollCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  pollTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: AppColors.textDark,
+    marginBottom: 10,
+  },
+  pollOptionBtn: {
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: 'white',
+    marginBottom: 8,
+    position: 'relative',
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  pollOptionVoted: {
+    borderColor: AppColors.primary,
+  },
+  pollProgressFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    backgroundColor: '#E6F4EA',
+  },
+  pollOptionContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  pollOptionText: {
+    fontSize: 13,
+    color: AppColors.textDark,
+    fontWeight: '500',
+  },
+  pollOptionTextVoted: {
+    color: AppColors.primary,
+    fontWeight: 'bold',
+  },
+  pollPercentText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: AppColors.primary,
+  },
   postFooter: {
     flexDirection: 'row',
     borderTopWidth: 1,
@@ -846,6 +1568,33 @@ const styles = StyleSheet.create({
     color: AppColors.error,
     fontWeight: 'bold',
   },
+  pillsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 14,
+  },
+  pillBtn: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  pillBtnActive: {
+    backgroundColor: AppColors.primaryLight,
+    borderColor: AppColors.primary,
+  },
+  pillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: AppColors.textMedium,
+  },
+  pillTextActive: {
+    color: AppColors.primary,
+    fontWeight: 'bold',
+  },
   fab: {
     position: 'absolute',
     right: 20,
@@ -856,10 +1605,6 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
     elevation: 6,
   },
   groupsHeaderRow: {
@@ -949,10 +1694,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     height: '100%',
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
     elevation: 8,
   },
   profilePanelHeader: {
@@ -1081,5 +1822,84 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     paddingHorizontal: 24,
+  },
+
+  // Stories Fullscreen Slideshow styles
+  storyViewerContainer: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  storyViewerImageWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  storyViewerImage: {
+    width: '100%',
+    height: '100%',
+  },
+  storyViewerGestureOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+  },
+  storyProgressContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 56 : 24,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    height: 3,
+  },
+  storyProgressBar: {
+    flex: 1,
+    marginHorizontal: 2,
+    borderRadius: 2,
+  },
+  storyViewerHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 70 : 36,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  storyViewerAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: 'white',
+  },
+  storyViewerName: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginLeft: 10,
+    flex: 1,
+  },
+  storyViewerCloseBtn: {
+    padding: 4,
+  },
+  storyViewerFooter: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 48 : 24,
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+  },
+  storyViewerTitle: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
 });
