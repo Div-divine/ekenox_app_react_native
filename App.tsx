@@ -12,6 +12,11 @@ import { FeedScreen } from './src/screens/FeedScreen';
 import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
 import { EventsScreen } from './src/screens/EventsScreen';
 import { EventDetailScreen } from './src/screens/EventDetailScreen';
+import { AssociationDetailScreen } from './src/screens/AssociationDetailScreen';
+import { CreateAssociationScreen } from './src/screens/CreateAssociationScreen';
+import { ChatRoomScreen } from './src/screens/ChatRoomScreen';
+import { MessagesScreen } from './src/screens/MessagesScreen';
+import { JoinRequestsScreen } from './src/screens/JoinRequestsScreen';
 import { AppColors } from './src/theme/colors';
 
 const AppStack = createStackNavigator();
@@ -24,6 +29,11 @@ const AuthenticatedNavigator = () => {
       <AppStack.Screen name="GroupDetail" component={GroupDetailScreen} />
       <AppStack.Screen name="Events" component={EventsScreen} />
       <AppStack.Screen name="EventDetail" component={EventDetailScreen} />
+      <AppStack.Screen name="AssociationDetail" component={AssociationDetailScreen} />
+      <AppStack.Screen name="CreateAssociation" component={CreateAssociationScreen} />
+      <AppStack.Screen name="ChatRoom" component={ChatRoomScreen} />
+      <AppStack.Screen name="Messages" component={MessagesScreen} />
+      <AppStack.Screen name="JoinRequests" component={JoinRequestsScreen} />
     </AppStack.Navigator>
   );
 };

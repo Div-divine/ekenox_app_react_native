@@ -699,7 +699,7 @@ export const FeedScreen = () => {
         <Text style={styles.headerTitle}>eKeNox</Text>
 
         <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Messages', 'Secure chat rooms are synced in Ekenox Chat.')}>
+          <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Messages')}>
             <Ionicons name="chatbubbles-outline" size={22} color={AppColors.textDark} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Notifications', 'Notification logs synced in profile metrics.')}>
@@ -915,7 +915,15 @@ export const FeedScreen = () => {
                     >
                       <View style={styles.groupHeader}>
                         <View style={styles.groupIconContainer}>
-                          <Ionicons name="people" size={24} color={AppColors.primary} />
+                          {group.cover_image_url ? (
+                            <Image
+                              source={{ uri: resolveMediaUrl(group.cover_image_url) }}
+                              style={styles.groupCoverImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Ionicons name="people" size={24} color={AppColors.primary} />
+                          )}
                         </View>
                         <View style={styles.groupDetails}>
                           <Text style={styles.groupName}>{group.name}</Text>
@@ -1638,6 +1646,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#E6F4EA',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  groupCoverImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
   },
   groupDetails: {
     marginLeft: 12,
