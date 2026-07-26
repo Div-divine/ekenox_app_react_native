@@ -33,6 +33,86 @@ type RouteParams = {
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '👏', '🔥', '🎉'];
 
+// ── List item union type (must be outside component for FlatList generic) ──
+type SeparatorItem = { kind: 'separator'; label: string; key: string };
+type MessageItem = { kind: 'message'; msg: ChatMessage; isFirst: boolean; isLast: boolean; key: string };
+type ListItem = SeparatorItem | MessageItem;
+
+// ── Hermes-safe date helpers (toLocaleTimeString unavailable in some Hermes builds) ──
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+const isSameDay = (a: Date, b: Date): boolean =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+/** Returns 'Today', 'Yesterday', or 'Monday, Jul 21' */
+const formatDateLabel = (iso: string): string => {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return '';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (isSameDay(date, today)) return 'Today';
+  if (isSameDay(date, yesterday)) return 'Yesterday';
+  return `${WEEKDAYS[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
+};
+
+/** Returns '09:45 AM' style — Hermes safe */
+const formatTime = (iso?: string): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m < 10 ? '0' : ''}${m} ${ampm}`;
+};
+
+/** Deduplicates messages by id (backend polling may return overlapping pages) */
+const deduplicateMessages = (msgs: ChatMessage[]): ChatMessage[] => {
+  const seen = new Set<string>();
+  return msgs.filter(m => {
+    const k = String(m.id);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+};
+
+const buildListItems = (msgs: ChatMessage[]): ListItem[] => {
+  const items: ListItem[] = [];
+  let lastDateLabel: string | null = null;
+  let lastSenderId: string | null = null;
+
+  for (let i = 0; i < msgs.length; i++) {
+    const msg = msgs[i];
+    const next = msgs[i + 1];
+    const dateLabel = formatDateLabel(msg.created_at || '');
+
+    if (dateLabel !== lastDateLabel) {
+      // Use index in key to guarantee uniqueness even if label text repeats
+      items.push({ kind: 'separator', label: dateLabel, key: `sep-${i}-${dateLabel}` });
+      lastDateLabel = dateLabel;
+      lastSenderId = null;
+    }
+
+    const senderId = String(msg.sender?.id ?? 'unknown');
+    const isFirst = senderId !== lastSenderId;
+    const nextSenderId = next ? String(next.sender?.id ?? 'unknown') : null;
+    const isLast = nextSenderId !== senderId;
+
+    // Prefix with 'msg-' + index to guarantee uniqueness when IDs are duplicated
+    items.push({ kind: 'message', msg, isFirst, isLast, key: `msg-${i}-${String(msg.id)}` });
+    lastSenderId = senderId;
+  }
+
+  return items;
+};
+
 export const ChatRoomScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<{ ChatRoom: RouteParams }, 'ChatRoom'>>();
@@ -62,12 +142,11 @@ export const ChatRoomScreen = () => {
     if (showLoader) setIsLoading(true);
     try {
       const data = await chatService.getMessages(chatRoomId);
-      // Backend returns array reversed (oldest first). We keep it reversed as FlatList renders oldest first by default,
-      // or we can sort it by date to ensure perfect chronological order.
+      // Sort chronologically then deduplicate by id
       const sorted = [...data].sort(
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
-      setMessages(sorted);
+      setMessages(deduplicateMessages(sorted));
     } catch (e: any) {
       console.error('Failed to load messages:', e.message);
     } finally {
@@ -120,7 +199,8 @@ export const ChatRoomScreen = () => {
 
     try {
       const newMsg = await chatService.sendMessage(chatRoomId, text, replyId);
-      setMessages(prev => [...prev, newMsg]);
+      // Append and deduplicate in case polling already added it
+      setMessages(prev => deduplicateMessages([...prev, newMsg]));
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to send message.');
     } finally {
@@ -171,43 +251,177 @@ export const ChatRoomScreen = () => {
     ]);
   };
 
-  // ─── Rendering Helpers ─────────────────────────────────────────────────────
+  const renderMetadataCard = (rawMetadata: any, isCurrentUser: boolean) => {
+    if (!rawMetadata) return null;
 
-  const renderMessageBubble = ({ item }: { item: ChatMessage }) => {
-    const isCurrentUser = String(item.sender?.id) === currentUserIdStr;
-    const hasReactions = item.reactions && item.reactions.length > 0;
+    let metadata = rawMetadata;
+    if (typeof metadata === 'string') {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch (e) {
+        console.error('Failed to parse message metadata:', e);
+      }
+    }
 
-    // Format time (e.g. 10:24 AM)
-    const formatTime = (iso?: string) => {
-      if (!iso) return '';
-      const d = new Date(iso);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    };
+    if (!metadata || typeof metadata !== 'object') return null;
+
+    const item = metadata.product || metadata.item || metadata;
+
+    const title =
+      item.product_title ||
+      item.title ||
+      item.name ||
+      metadata.product_title ||
+      metadata.title ||
+      metadata.name ||
+      'Marketplace Item';
+
+    const rawImage =
+      item.product_image ||
+      item.image ||
+      item.image_url ||
+      item.thumbnail ||
+      item.photos?.[0] ||
+      item.profile_image ||
+      metadata.product_image ||
+      metadata.image;
+
+    const imageUrl = rawImage ? UrlHelper.convertPathToUrl(rawImage) : null;
+
+    const price =
+      item.product_price ??
+      item.price ??
+      item.prize ??
+      metadata.product_price ??
+      metadata.price ??
+      metadata.prize;
+
+    const hourlyRate =
+      item.hourly_rate ??
+      item.product_hourly_rate ??
+      item.hourlyRate ??
+      metadata.hourly_rate ??
+      metadata.product_hourly_rate ??
+      metadata.hourlyRate;
+
+    const sellerName =
+      item.seller_name ||
+      metadata.seller_name ||
+      item.sellerName ||
+      metadata.sellerName;
+
+    const productId =
+      item.product_id ||
+      item.id ||
+      metadata.product_id ||
+      metadata.productId;
+
+    let priceDisplay = '';
+    if (price !== undefined && price !== null && price !== '') {
+      priceDisplay = typeof price === 'number' ? `$${price.toFixed(2)}` : (String(price).startsWith('$') ? String(price) : `$${price}`);
+    }
+    if (hourlyRate !== undefined && hourlyRate !== null && hourlyRate !== '') {
+      const hrDisplay = typeof hourlyRate === 'number' ? `$${hourlyRate.toFixed(2)}/hr` : (String(hourlyRate).includes('/hr') ? String(hourlyRate) : `$${hourlyRate}/hr`);
+      priceDisplay = priceDisplay ? `${priceDisplay} • ${hrDisplay}` : hrDisplay;
+    }
 
     return (
-      <View style={[styles.messageRow, isCurrentUser ? styles.rowRight : styles.rowLeft]}>
-        {/* Profile Avatar for group chat */}
+      <TouchableOpacity
+        activeOpacity={0.85}
+        style={[
+          styles.metadataCard,
+          isCurrentUser ? styles.metadataCardRight : styles.metadataCardLeft
+        ]}
+        onPress={() => {
+          if (productId) {
+            try {
+              (navigation as any).navigate('MainTabs', {
+                screen: 'EcoMarket',
+                params: { productId: Number(productId) },
+              });
+            } catch (e) {
+              (navigation as any).navigate('EcoMarket', { productId: Number(productId) });
+            }
+          }
+        }}
+      >
+        <View style={styles.metadataCardInner}>
+          {imageUrl ? (
+            <Image source={{ uri: imageUrl }} style={styles.metadataImage} />
+          ) : (
+            <View style={styles.metadataImageFallback}>
+              <Ionicons name="pricetag" size={22} color={AppColors.primary} />
+            </View>
+          )}
+          <View style={styles.metadataInfo}>
+            <View style={styles.metadataTagRow}>
+              <Ionicons name="bag-handle" size={11} color={AppColors.primary} />
+              <Text style={styles.metadataTagText}>
+                {sellerName ? `Item Inquiry • ${sellerName}` : 'Item Inquiry'}
+              </Text>
+            </View>
+            <Text style={styles.metadataTitle} numberOfLines={1}>{title}</Text>
+            {priceDisplay ? (
+              <Text style={styles.metadataPrice}>{priceDisplay}</Text>
+            ) : null}
+          </View>
+          {productId ? (
+            <Ionicons name="chevron-forward" size={16} color={AppColors.textMedium} />
+          ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderListItem = ({ item }: { item: ListItem }) => {
+    // ── Date separator ──
+    if (item.kind === 'separator') {
+      return (
+        <View style={styles.dateSeparatorRow}>
+          <View style={styles.dateSeparatorLine} />
+          <Text style={styles.dateSeparatorLabel}>{item.label}</Text>
+          <View style={styles.dateSeparatorLine} />
+        </View>
+      );
+    }
+
+    // ── Message bubble ──
+    const { msg, isFirst, isLast } = item;
+    const isCurrentUser = String(msg.sender?.id) === currentUserIdStr;
+    const hasReactions = msg.reactions && msg.reactions.length > 0;
+
+    return (
+      <View
+        style={[
+          styles.messageRow,
+          isCurrentUser ? styles.rowRight : styles.rowLeft,
+          !isFirst && { marginTop: 2 },
+        ]}
+      >
+        {/* Avatar — shown only on LAST bubble of a consecutive sender run */}
         {!isCurrentUser && (
-          <View style={styles.senderAvatarBox}>
-            {item.sender?.avatar || item.sender?.profile_image ? (
-              <Image
-                source={{ uri: UrlHelper.convertPathToUrl(item.sender.avatar || item.sender.profile_image) }}
-                style={styles.senderAvatar}
-              />
-            ) : (
-              <View style={styles.senderAvatarPlaceholder}>
-                <Text style={styles.senderAvatarText}>
-                  {(item.sender?.full_name || '?')[0].toUpperCase()}
-                </Text>
-              </View>
-            )}
+          <View style={[styles.senderAvatarBox, !isLast && styles.avatarHidden]}>
+            {isLast ? (
+              (msg.sender?.avatar || msg.sender?.profile_image) ? (
+                <Image
+                  source={{ uri: UrlHelper.convertPathToUrl(msg.sender.avatar || msg.sender.profile_image) }}
+                  style={styles.senderAvatar}
+                />
+              ) : (
+                <View style={styles.senderAvatarPlaceholder}>
+                  <Text style={styles.senderAvatarText}>
+                    {(msg.sender?.full_name || '?')[0].toUpperCase()}
+                  </Text>
+                </View>
+              )
+            ) : null}
           </View>
         )}
 
         <View style={styles.bubbleContainer}>
-          {/* Sender Name above message bubble */}
-          {!isCurrentUser && (
-            <Text style={styles.senderName}>{item.sender?.full_name || 'Member'}</Text>
+          {/* Sender name — only on FIRST bubble of a run */}
+          {!isCurrentUser && isFirst && (
+            <Text style={styles.senderName}>{msg.sender?.full_name || 'Member'}</Text>
           )}
 
           <TouchableOpacity
@@ -215,41 +429,45 @@ export const ChatRoomScreen = () => {
             style={[
               styles.bubble,
               isCurrentUser ? styles.bubbleRight : styles.bubbleLeft,
-              hasReactions && { marginBottom: 12 }
+              isCurrentUser
+                ? { borderBottomRightRadius: isLast ? 4 : 18, borderTopRightRadius: isFirst ? 18 : 6 }
+                : { borderBottomLeftRadius: isLast ? 4 : 18, borderTopLeftRadius: isFirst ? 18 : 6 },
+              hasReactions && { marginBottom: 14 },
             ]}
-            onLongPress={() => {
-              setSelectedMessage(item);
-              setOptionsModalVisible(true);
-            }}
+            onLongPress={() => { setSelectedMessage(msg); setOptionsModalVisible(true); }}
           >
-            {/* Reply Preview Curve inside the bubble */}
-            {item.reply_to && (
+            {/* Reply preview */}
+            {msg.reply_to && (
               <View style={styles.replyPreviewInBubble}>
                 <View style={styles.replyPreviewHeader}>
                   <Ionicons name="arrow-undo" size={10} color={AppColors.primary} />
                   <Text style={styles.replyPreviewInBubbleSender}>
-                    {String(item.reply_to.sender?.id) === currentUserIdStr ? 'You' : (item.reply_to.sender?.full_name || 'Member')}
+                    {String(msg.reply_to.sender?.id) === currentUserIdStr ? 'You' : (msg.reply_to.sender?.full_name || 'Member')}
                   </Text>
                 </View>
-                <Text style={styles.replyPreviewInBubbleText} numberOfLines={1}>
-                  {item.reply_to.content}
-                </Text>
+                <Text style={styles.replyPreviewInBubbleText} numberOfLines={1}>{msg.reply_to.content}</Text>
               </View>
             )}
 
+            {/* Metadata Card (Product/Item Inquiry) */}
+            {msg.metadata && renderMetadataCard(msg.metadata, isCurrentUser)}
+
             <Text style={[styles.messageText, isCurrentUser ? styles.textRight : styles.textLeft]}>
-              {item.content}
+              {msg.content}
             </Text>
 
-            <Text style={[styles.messageTime, isCurrentUser ? styles.timeRight : styles.timeLeft]}>
-              {formatTime(item.created_at)}
-            </Text>
+            {/* Timestamp — shown only on LAST bubble of a run */}
+            {isLast && (
+              <Text style={[styles.messageTime, isCurrentUser ? styles.timeRight : styles.timeLeft]}>
+                {formatTime(msg.created_at)}
+              </Text>
+            )}
           </TouchableOpacity>
 
-          {/* Reactions Row overlaid bottom right of bubble */}
+          {/* Reactions */}
           {hasReactions && (
             <View style={[styles.reactionsRow, isCurrentUser ? styles.rxnRight : styles.rxnLeft]}>
-              {item.reactions!.map((rxn, idx) => (
+              {msg.reactions!.map((rxn, idx) => (
                 <View key={rxn.id || idx} style={styles.reactionBadge}>
                   <Text style={styles.reactionEmoji}>{rxn.emoji}</Text>
                 </View>
@@ -298,9 +516,9 @@ export const ChatRoomScreen = () => {
           ) : (
             <FlatList
               ref={flatListRef}
-              data={messages}
-              renderItem={renderMessageBubble}
-              keyExtractor={item => String(item.id)}
+              data={buildListItems(messages)}
+              renderItem={renderListItem}
+              keyExtractor={item => item.key}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
               onContentSizeChange={scrollToBottom}
@@ -487,7 +705,26 @@ const styles = StyleSheet.create({
   listContent: {
     padding: 16,
     paddingBottom: 24,
-    gap: 14,
+  },
+
+  // ── Date Timeline Separator ──
+  dateSeparatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 16,
+    gap: 10,
+  },
+  dateSeparatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E5E7EB',
+  },
+  dateSeparatorLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9CA3AF',
+    letterSpacing: 0.4,
+    paddingHorizontal: 4,
   },
 
   // ── Message Bubbles ──
@@ -495,6 +732,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     width: '100%',
+    marginVertical: 2,
   },
   rowRight: {
     justifyContent: 'flex-end',
@@ -508,6 +746,10 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     overflow: 'hidden',
+  },
+  // Avatar slot is preserved for alignment but made invisible for non-last messages
+  avatarHidden: {
+    opacity: 0,
   },
   senderAvatar: {
     width: '100%',
@@ -794,5 +1036,70 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: AppColors.textMedium,
+  },
+
+  // ── Item / Product Metadata Card ──
+  metadataCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  metadataCardRight: {
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+  },
+  metadataCardLeft: {
+    borderColor: '#E5E7EB',
+  },
+  metadataCardInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  metadataImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  metadataImageFallback: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: AppColors.primary + '18',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metadataInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  metadataTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metadataTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: AppColors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  metadataTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  metadataPrice: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#10B981',
   },
 });

@@ -3,11 +3,13 @@
     "name": "Ekenox_RNT",
     "slug": "Ekenox_RNT",
     "version": "1.0.0",
+    "scheme": "ekenox",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ekenox.app"
     },
     "android": {
       "package": "com.ekenox.app",
@@ -23,7 +25,9 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "@react-native-community/datetimepicker",
+      "expo-web-browser"
     ]
   }
 }

@@ -20,6 +20,7 @@ import {
   ScrollView,
   RefreshControl,
   Dimensions,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
@@ -144,6 +145,31 @@ export const EventsScreen = () => {
   // Registration action loading
   const [actionLoadingId, setActionLoadingId] = useState<string | number | null>(null);
 
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const HEADER_HEIGHT = 60 + insets.top;
+  const headerTranslateY = Animated.diffClamp(scrollY, 0, HEADER_HEIGHT).interpolate({
+    inputRange: [0, HEADER_HEIGHT],
+    outputRange: [0, -HEADER_HEIGHT],
+  });
+
+  const createBarTranslateY = Animated.diffClamp(scrollY, 0, 60).interpolate({
+    inputRange: [0, 60],
+    outputRange: [0, -60],
+  });
+
+  const START_Y = 66 + (!searchQuery.trim() ? (50 + 44) : 0);
+  const absoluteBarOpacity = scrollY.interpolate({
+    inputRange: [START_Y - 20, START_Y],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  useEffect(() => {
+    scrollY.setValue(0);
+  }, [activeTab, isListView]);
+
+
   // ── location permission ─────────────────────────────────────────────────────
   const requestLocation = useCallback(async () => {
     try {
@@ -209,7 +235,6 @@ export const EventsScreen = () => {
 
   // ── initial load ────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetchTab('Ongoing');
     requestLocation();
   }, []);
 
@@ -271,7 +296,12 @@ export const EventsScreen = () => {
         const r = await feedService.unregisterFromEvent(event.id);
         if (r.success) {
           Alert.alert('Done', `Unregistered from "${event.title}".`);
-          updateEventInMap(event.id, { isRegistered: false, is_registered: false });
+          updateEventInMap(event.id, {
+            isRegistered: false,
+            is_registered: false,
+            attendeesCount: Math.max(0, (event.attendeesCount ?? 1) - 1),
+            attendees_count: Math.max(0, (event.attendees_count ?? 1) - 1),
+          });
           // Remove from Registered tab
           setEventsMap(prev => ({
             ...prev,
@@ -286,6 +316,7 @@ export const EventsScreen = () => {
             isRegistered: true,
             is_registered: true,
             attendeesCount: (event.attendeesCount ?? 0) + 1,
+            attendees_count: (event.attendees_count ?? 0) + 1,
           });
         } else Alert.alert('Error', r.message || 'Failed to register.');
       }
@@ -343,19 +374,8 @@ export const EventsScreen = () => {
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <StatusBar barStyle="dark-content" backgroundColor="white" />
-
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Events</Text>
-        <View style={{ width: 38 }} />
-      </View>
-
+  const renderEventsHeader = () => (
+    <>
       {/* ── Search Bar ── */}
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchIcon} />
@@ -432,49 +452,143 @@ export const EventsScreen = () => {
         </View>
       )}
 
+      {/* ── Top Create Event Bar ── */}
+      <View style={styles.createEventBarCard}>
+        <TouchableOpacity
+          style={styles.createEventBarContent}
+          onPress={() => navigation.navigate('CreateEvent', { onSuccess: handleRefresh })}
+          activeOpacity={0.85}
+        >
+          <View style={styles.createEventBarIconHolder}>
+            <Ionicons name="calendar" size={18} color={AppColors.primary} />
+          </View>
+          <Text style={styles.createEventBarInputPlaceholder}>Host an eco workshop, cleanup or meetup…</Text>
+          <View style={styles.createEventBarBtn}>
+            <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+            <Text style={styles.createEventBarBtnText}>Create Event</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="white" />
+
+      {/* ── Header ── */}
+      <Animated.View
+        style={[
+          styles.header,
+          {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            paddingTop: insets.top,
+            height: 60 + insets.top,
+            transform: [{ translateY: headerTranslateY }],
+          },
+        ]}
+      >
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Events</Text>
+        <View style={styles.backBtn} />
+      </Animated.View>
+
+      {/* Sticky Create Event Bar Overlay */}
+      {!isCurrentLoading && (
+        <Animated.View
+          style={[
+            styles.createEventBarCard,
+            {
+              position: 'absolute',
+              top: 60 + insets.top,
+              left: 0,
+              right: 0,
+              zIndex: 99,
+              marginVertical: 0,
+              paddingVertical: 8,
+              backgroundColor: '#F5F5F7',
+              opacity: absoluteBarOpacity,
+              transform: [{ translateY: createBarTranslateY }],
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.createEventBarContent}
+            onPress={() => navigation.navigate('CreateEvent', { onSuccess: handleRefresh })}
+            activeOpacity={0.85}
+          >
+            <View style={styles.createEventBarIconHolder}>
+              <Ionicons name="calendar" size={18} color={AppColors.primary} />
+            </View>
+            <Text style={styles.createEventBarInputPlaceholder}>Host an eco workshop, cleanup or meetup…</Text>
+            <View style={styles.createEventBarBtn}>
+              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+              <Text style={styles.createEventBarBtnText}>Create Event</Text>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
       {/* ── Body ── */}
       {isCurrentLoading && eventsMap[activeTab].length === 0 ? (
-        <View style={styles.loadingContainer}>
+        <View style={[styles.loadingContainer, { paddingTop: 60 + insets.top }]}>
           <ActivityIndicator color={AppColors.primary} size="large" />
           <Text style={styles.loadingText}>Loading {activeTab.toLowerCase()} events…</Text>
         </View>
       ) : activeTab === 'Nearby' && !location && !loadingMap['Nearby'] ? (
         <NearbyPermissionView onEnable={requestLocation} hasError={locationError} />
       ) : isSearching ? (
-        <View style={styles.loadingContainer}>
+        <View style={[styles.loadingContainer, { paddingTop: 60 + insets.top }]}>
           <ActivityIndicator color={AppColors.primary} size="small" />
           <Text style={styles.loadingText}>Searching…</Text>
         </View>
       ) : !isListView ? (
         // ── Calendar view
-        <FlatList
+        <Animated.FlatList
           data={[]}
           renderItem={null}
+          contentContainerStyle={{ paddingTop: 60 + insets.top }}
           ListHeaderComponent={
-            <CalendarView
-              selectedDate={selectedDate}
-              monthName={monthName}
-              firstDay={firstDay}
-              daysCount={daysCount}
-              eventsByDate={eventsByDate}
-              onDayPress={d => setSelectedDate(d)}
-              onChangeMonth={changeMonth}
-              eventsOnDate={eventsOnSelectedDate}
-              onEventPress={ev =>
-                navigation.navigate('EventDetail' as never, { eventId: ev.id } as never)
-              }
-            />
+            <>
+              {renderEventsHeader()}
+              <CalendarView
+                selectedDate={selectedDate}
+                monthName={monthName}
+                firstDay={firstDay}
+                daysCount={daysCount}
+                eventsByDate={eventsByDate}
+                onDayPress={d => setSelectedDate(d)}
+                onChangeMonth={changeMonth}
+                eventsOnDate={eventsOnSelectedDate}
+                onEventPress={ev =>
+                  navigation.navigate('EventDetail' as never, { eventId: ev.id } as never)
+                }
+              />
+            </>
           }
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} />
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
           }
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+          scrollEventThrottle={16}
         />
       ) : (
         // ── List view
-        <FlatList
+        <Animated.FlatList
           data={displayedEvents}
           keyExtractor={item => item.id.toString()}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingTop: 60 + insets.top }]}
+          ListHeaderComponent={renderEventsHeader}
           renderItem={({ item }) => (
             <EventCard
               event={item}
@@ -486,8 +600,13 @@ export const EventsScreen = () => {
             />
           )}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} />
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
           }
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+          scrollEventThrottle={16}
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.4}
           ListFooterComponent={
@@ -502,6 +621,7 @@ export const EventsScreen = () => {
           }
         />
       )}
+
     </View>
   );
 };
@@ -536,6 +656,12 @@ const EventCard = ({
           <Ionicons name={status.icon} size={11} color={status.color} />
           <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
         </View>
+        {(event.privacy_level === 'private' || event.privacyLevel === 'private') && (
+          <View style={styles.privateEventBadge}>
+            <Ionicons name="lock-closed" size={10} color="white" />
+            <Text style={styles.privateEventBadgeText}>PRIVATE</Text>
+          </View>
+        )}
         {event.distance_km !== undefined && (
           <View style={styles.distanceBadge}>
             <Ionicons name="navigate" size={10} color="white" />
@@ -548,11 +674,26 @@ const EventCard = ({
       <View style={styles.cardContent}>
         <Text style={styles.cardTitle} numberOfLines={2}>{event.title}</Text>
 
-        {event.organizer && (
-          <Text style={styles.cardOrganizer} numberOfLines={1}>
-            by {event.organizer.name}
-          </Text>
-        )}
+        {/* Creator / Organizer Header */}
+        {(() => {
+          const creator = event.creator || event.organizer;
+          const creatorName = creator?.full_name || creator?.name || 'Organizer';
+          const creatorImg = resolveMediaUrl(creator?.profile_image || creator?.avatar_url || creator?.image);
+          return (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              {creatorImg ? (
+                <Image source={{ uri: creatorImg }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 6 }} />
+              ) : (
+                <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: AppColors.primary, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
+                  <Ionicons name="person" size={12} color="white" />
+                </View>
+              )}
+              <Text style={styles.cardOrganizer} numberOfLines={1}>
+                {creatorName}
+              </Text>
+            </View>
+          );
+        })()}
 
         <View style={styles.cardInfoRow}>
           <Ionicons name="time-outline" size={13} color={AppColors.primary} />
@@ -562,8 +703,16 @@ const EventCard = ({
         </View>
 
         <View style={styles.cardInfoRow}>
-          <Ionicons name="location-outline" size={13} color={AppColors.primary} />
-          <Text style={styles.cardInfoText} numberOfLines={1}>{event.location || 'Location TBD'}</Text>
+          <Ionicons
+            name={event.privacy_level === 'private' || event.privacyLevel === 'private' ? "lock-closed-outline" : "location-outline"}
+            size={13}
+            color={AppColors.primary}
+          />
+          <Text style={styles.cardInfoText} numberOfLines={1}>
+            {event.privacy_level === 'private' || event.privacyLevel === 'private'
+              ? '🔒 Private Location'
+              : (event.location || 'Location TBD')}
+          </Text>
         </View>
 
         <View style={styles.cardInfoRow}>
@@ -577,8 +726,8 @@ const EventCard = ({
         {/* Categories */}
         {event.categories && event.categories.length > 0 && (
           <View style={styles.cardCatsRow}>
-            {event.categories.slice(0, 3).map(c => (
-              <View key={c.id} style={styles.catChip}>
+            {event.categories.slice(0, 3).map((c, idx) => (
+              <View key={c.id || c.name || idx.toString()} style={styles.catChip}>
                 <Text style={styles.catChipText}>{c.name}</Text>
               </View>
             ))}
@@ -976,6 +1125,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
   },
+  privateEventBadge: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 3,
+  },
+  privateEventBadgeText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
   distanceBadge: {
     position: 'absolute',
     top: 12,
@@ -1121,6 +1288,52 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '700',
     fontSize: 14,
+  },
+  createEventBarCard: {
+    paddingHorizontal: 16,
+    marginVertical: 8,
+  },
+  createEventBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  createEventBarIconHolder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#CCFAF6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  createEventBarInputPlaceholder: {
+    flex: 1,
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  createEventBarBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  createEventBarBtnText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '700',
   },
 });
 

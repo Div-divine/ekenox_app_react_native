@@ -24,6 +24,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppColors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
+import { AssociationInviteModal } from './AssociationInviteModal';
 import associationService, {
   Association,
   AssociationMember,
@@ -51,24 +52,38 @@ type RouteParams = { associationId: string | number };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const parseSafeDate = (dateStr?: string | null): Date | null => {
+  if (!dateStr) return null;
+  if ((dateStr as any) instanceof Date) return dateStr as unknown as Date;
+  let parsed = new Date(dateStr);
+  if (!isNaN(parsed.getTime())) return parsed;
+  const cleaned = String(dateStr).replace(' ', 'T');
+  parsed = new Date(cleaned);
+  if (!isNaN(parsed.getTime())) return parsed;
+  return null;
+};
+
 const formatDate = (iso?: string) => {
-  if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-US', {
+  const d = parseSafeDate(iso);
+  if (!d) return '';
+  return d.toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   });
 };
 
 const formatEventDate = (start?: string, end?: string) => {
-  if (!start) return 'Date TBD';
-  const s = new Date(start);
+  const s = parseSafeDate(start);
+  if (!s) return 'Date TBD';
   return `${s.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} • ${s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 };
 
 const getEventStatus = (start_time?: string, end_time?: string) => {
   if (!start_time) return { label: 'Upcoming', color: '#0D9488', bg: '#CCFAF6' };
   const now = Date.now();
-  const s = new Date(start_time).getTime();
-  const e = end_time ? new Date(end_time).getTime() : s;
+  const sDate = parseSafeDate(start_time);
+  const s = sDate ? sDate.getTime() : 0;
+  const eDate = parseSafeDate(end_time);
+  const e = eDate ? eDate.getTime() : s;
   if (now >= s && now <= e) return { label: 'Ongoing', color: '#10B981', bg: '#D1FAE5' };
   if (now < s) return { label: 'Upcoming', color: '#0D9488', bg: '#CCFAF6' };
   return { label: 'Past', color: '#6B7280', bg: '#F3F4F6' };
@@ -200,6 +215,14 @@ export const AssociationDetailScreen = () => {
   const [preferredRole, setPreferredRole] = useState('');
   const [resumeSelected, setResumeSelected] = useState(false);
   const [availableRoles, setAvailableRoles] = useState<Role[]>([]);
+
+  const isJoinFormValid = () => {
+    if (joinFormConfig?.require_motif && !joinMessage.trim()) return false;
+    if (joinFormConfig?.enable_resume_upload && !resumeSelected) return false;
+    if (joinFormConfig?.enable_portfolio_links && !portfolioLink.trim()) return false;
+    if (joinFormConfig?.enable_preferred_role && !preferredRole) return false;
+    return true;
+  };
 
   // Association settings states
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -888,7 +911,13 @@ export const AssociationDetailScreen = () => {
 
           <TouchableOpacity
             style={s.adminAction}
-            onPress={() => setCreateEventVisible(true)}
+            onPress={() => navigation.navigate('CreateEvent', {
+              associationId: assoc.id,
+              associationName: assoc.name,
+              onSuccess: () => {
+                loadEvents();
+              }
+            })}
           >
             <View style={[s.adminActionIcon, { backgroundColor: '#E0F2FE' }]}>
               <Ionicons name="calendar-outline" size={18} color="#0284C7" />
@@ -1010,6 +1039,58 @@ export const AssociationDetailScreen = () => {
 
   const renderEvents = () => (
     <View style={s.tabContent}>
+      {/* ── Create Event Bar for Association Admins ── */}
+      {isAdmin(role) && assoc && (
+        <TouchableOpacity
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: 'white',
+            borderRadius: 12,
+            padding: 12,
+            marginBottom: 12,
+            borderWidth: 1,
+            borderColor: '#E5E7EB',
+          }}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate('CreateEvent', {
+            associationId: assoc.id,
+            associationName: assoc.name,
+            onSuccess: () => loadEvents(),
+          })}
+        >
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: '#CCFAF6',
+              justifyContent: 'center',
+              alignItems: 'center',
+              marginRight: 12,
+            }}
+          >
+            <Ionicons name="calendar" size={18} color={AppColors.primary} />
+          </View>
+          <Text style={{ fontSize: 14, color: AppColors.textMedium, flex: 1, fontWeight: '500' }}>
+            Organize an eco event for {assoc.name}…
+          </Text>
+          <View
+            style={{
+              backgroundColor: AppColors.primary,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 16,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }}
+          >
+            <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+            <Text style={{ color: 'white', fontSize: 12, fontWeight: '600' }}>Create Event</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
       {!eventsLoaded ? (
         <View style={s.centeredTab}>
           <ActivityIndicator color={AppColors.primary} size="large" />
@@ -1064,6 +1145,7 @@ export const AssociationDetailScreen = () => {
       )}
     </View>
   );
+
 
   const renderMembers = () => (
     <View style={s.tabContent}>
@@ -1141,20 +1223,20 @@ export const AssociationDetailScreen = () => {
     <View style={[s.container]}>
       {/* Animated sticky header */}
       <Animated.View style={[s.stickyHeader, { paddingTop: insets.top, opacity: headerOpacity }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={s.stickyBackBtn}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={s.stickyBackBtn} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
           <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
         </TouchableOpacity>
         <Text style={s.stickyTitle} numberOfLines={1}>{assoc.name}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           {isAdmin(role) && (
-            <TouchableOpacity style={[s.stickyFollowBtn, { marginRight: 4 }]} onPress={() => setSettingsVisible(true)}>
+            <TouchableOpacity style={[s.stickyFollowBtn, { marginRight: 4 }]} onPress={() => setSettingsVisible(true)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
               <Ionicons name="settings-outline" size={20} color={AppColors.primary} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[s.stickyFollowBtn, { marginRight: 4 }]} onPress={handleFollow}>
+          <TouchableOpacity style={[s.stickyFollowBtn, { marginRight: 4 }]} onPress={handleFollow} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
             <Ionicons name={assoc.is_favorited ? 'star' : 'star-outline'} size={20} color={assoc.is_favorited ? '#F59E0B' : AppColors.primary} />
           </TouchableOpacity>
-          <TouchableOpacity style={s.stickyFollowBtn} onPress={() => setHeaderMenuVisible(true)}>
+          <TouchableOpacity style={s.stickyFollowBtn} onPress={() => setHeaderMenuVisible(true)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
             <Ionicons name="ellipsis-vertical" size={20} color={AppColors.primary} />
           </TouchableOpacity>
         </View>
@@ -1178,19 +1260,19 @@ export const AssociationDetailScreen = () => {
           )}
           <View style={s.heroBannerOverlay} />
           <View style={[s.heroFloatingRow, { top: insets.top + 10 }]}>
-            <TouchableOpacity style={s.heroFloatBtn} onPress={() => navigation.goBack()}>
+            <TouchableOpacity style={s.heroFloatBtn} onPress={() => navigation.goBack()} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
               <Ionicons name="arrow-back" size={20} color="white" />
             </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               {isAdmin(role) && (
-                <TouchableOpacity style={s.heroFloatBtn} onPress={() => setSettingsVisible(true)}>
+                <TouchableOpacity style={s.heroFloatBtn} onPress={() => setSettingsVisible(true)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
                   <Ionicons name="settings-outline" size={20} color="white" />
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={s.heroFloatBtn} onPress={handleFollow}>
+              <TouchableOpacity style={s.heroFloatBtn} onPress={handleFollow} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
                 <Ionicons name={assoc.is_favorited ? 'star' : 'star-outline'} size={20} color="white" />
               </TouchableOpacity>
-              <TouchableOpacity style={s.heroFloatBtn} onPress={() => setHeaderMenuVisible(true)}>
+              <TouchableOpacity style={s.heroFloatBtn} onPress={() => setHeaderMenuVisible(true)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
                 <Ionicons name="ellipsis-vertical" size={20} color="white" />
               </TouchableOpacity>
             </View>
@@ -1250,7 +1332,7 @@ export const AssociationDetailScreen = () => {
           {/* ── Action Buttons ── */}
           <View style={s.actionsRow}>
             {/* Favorite (Follow) */}
-            <TouchableOpacity style={s.followBtn} onPress={handleFollow}>
+            {/* <TouchableOpacity style={s.followBtn} onPress={handleFollow}>
               <Ionicons
                 name={assoc.is_favorited ? 'star' : 'star-outline'}
                 size={16}
@@ -1259,7 +1341,7 @@ export const AssociationDetailScreen = () => {
               <Text style={[s.followBtnText, assoc.is_favorited && { color: '#F59E0B' }]}>
                 {assoc.is_favorited ? 'Favorited' : 'Favorite'}
               </Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             {/* Chat Room (If member) */}
             {isMember && assoc.chat_room && (
@@ -1450,8 +1532,13 @@ export const AssociationDetailScreen = () => {
             </ScrollView>
 
             <TouchableOpacity
-              style={[s.ctaBtn, { width: '100%', marginTop: 12 }]}
+              style={[
+                s.ctaBtn,
+                { width: '100%', marginTop: 12 },
+                !isJoinFormValid() && { backgroundColor: AppColors.textLight, borderColor: AppColors.textLight }
+              ]}
               onPress={() => {
+                if (!isJoinFormValid()) return;
                 const payload: any = {};
                 if (joinFormConfig?.enable_resume_upload && resumeSelected) {
                   payload.resume_url = 'attached_resume.pdf';
@@ -1463,27 +1550,9 @@ export const AssociationDetailScreen = () => {
                   payload.portfolio_links = [portfolioLink];
                 }
 
-                // Check required fields based on configuration toggles
-                if (joinFormConfig?.require_motif && !joinMessage.trim()) {
-                  Alert.alert('Required field missing', 'Please enter your reason for joining.');
-                  return;
-                }
-                if (joinFormConfig?.enable_resume_upload && !resumeSelected) {
-                  Alert.alert('Required field missing', 'Please attach your resume document.');
-                  return;
-                }
-                if (joinFormConfig?.enable_portfolio_links && !portfolioLink.trim()) {
-                  Alert.alert('Required field missing', 'Please enter your portfolio or website link.');
-                  return;
-                }
-                if (joinFormConfig?.enable_preferred_role && !preferredRole) {
-                  Alert.alert('Required field missing', 'Please select your preferred role.');
-                  return;
-                }
-
                 handleJoinSubmit(joinMessage || undefined, payload);
               }}
-              disabled={actionLoading}
+              disabled={actionLoading || !isJoinFormValid()}
             >
               {actionLoading ? (
                 <ActivityIndicator color="white" />
@@ -1496,347 +1565,15 @@ export const AssociationDetailScreen = () => {
       </Modal>
 
       {/* ── Invite Members Modal ── */}
-      <Modal visible={inviteVisible} animationType="slide" transparent onRequestClose={() => setInviteVisible(false)}>
-        <View style={s.modalOverlay}>
-          <View style={[s.modalSheet, { maxHeight: '90%' }]}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Invite Members</Text>
-              <TouchableOpacity onPress={() => setInviteVisible(false)}>
-                <Ionicons name="close" size={24} color={AppColors.textDark} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 500, marginVertical: 8 }} contentContainerStyle={{ paddingBottom: 20 }} keyboardShouldPersistTaps="handled">
-              {/* Search Users Input */}
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Search Users to Invite
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                  <TextInput
-                    style={[s.modalInput, { flex: 1, height: 44, paddingVertical: 10 }]}
-                    value={userSearchQuery}
-                    onChangeText={(text) => {
-                      setUserSearchQuery(text);
-                      searchUsersForInvitation(text, true);
-                    }}
-                    placeholder="Search by name, pseudo, email..."
-                    placeholderTextColor={AppColors.textLight}
-                  />
-                  {usersLoading && <ActivityIndicator color={AppColors.primary} size="small" />}
-                </View>
-
-                {/* Search Results */}
-                {searchResults.length > 0 && (
-                  <View style={{ marginTop: 8, backgroundColor: '#F9FAFB', borderRadius: 8, padding: 8 }}>
-                    {searchResults.map((user) => {
-                      const isSelected = selectedInvitees.some(inv => inv.type === 'user' && String(inv.id) === String(user.id));
-                      return (
-                        <TouchableOpacity
-                          key={user.id}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            paddingVertical: 8,
-                            borderBottomWidth: 1,
-                            borderBottomColor: '#F3F4F6',
-                          }}
-                          onPress={() => {
-                            if (isSelected) {
-                              setSelectedInvitees(prev => prev.filter(inv => !(inv.type === 'user' && String(inv.id) === String(user.id))));
-                            } else {
-                              const defaultRole = availableRoles.find(r => r.name === 'VIEWER_ASSO') || availableRoles[0];
-                              setSelectedInvitees(prev => [
-                                ...prev,
-                                {
-                                  type: 'user',
-                                  id: user.id,
-                                  name: user.full_name,
-                                  email: user.email,
-                                  role_id: inviteRoleId || (defaultRole ? String(defaultRole.id) : ''),
-                                  avatar: user.profile_image
-                                }
-                              ]);
-                            }
-                          }}
-                        >
-                          {user.profile_image ? (
-                            <Image source={{ uri: resolveUrl(user.profile_image) }} style={{ width: 32, height: 32, borderRadius: 16 }} />
-                          ) : (
-                            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#E6F4EA', justifyContent: 'center', alignItems: 'center' }}>
-                              <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.primary }}>{(user.full_name || '?')[0].toUpperCase()}</Text>
-                            </View>
-                          )}
-                          <View style={{ flex: 1, marginLeft: 8 }}>
-                            <Text style={{ fontSize: 14, fontWeight: '600', color: AppColors.textDark }}>{user.full_name}</Text>
-                            <Text style={{ fontSize: 11, color: AppColors.textMedium }}>{user.email}</Text>
-                          </View>
-                          <Ionicons
-                            name={isSelected ? "checkmark-circle" : "ellipse-outline"}
-                            size={20}
-                            color={isSelected ? AppColors.primary : AppColors.textLight}
-                          />
-                        </TouchableOpacity>
-                      );
-                    })}
-
-                    {usersHasMore && (
-                      <TouchableOpacity
-                        style={{ paddingVertical: 10, alignItems: 'center' }}
-                        onPress={loadMoreUsers}
-                      >
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: AppColors.primary }}>Load More Users</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </View>
-
-              {/* OR Divider */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB' }} />
-                <Text style={{ marginHorizontal: 10, fontSize: 11, fontWeight: '700', color: AppColors.textLight }}>OR INVITE BY EMAIL</Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB' }} />
-              </View>
-
-              {/* Invite by Email */}
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Email Address
-                </Text>
-                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                  <TextInput
-                    style={[s.modalInput, { flex: 1, height: 44, paddingVertical: 10 }]}
-                    value={inviteEmail}
-                    onChangeText={setInviteEmail}
-                    placeholder="Enter email to invite"
-                    placeholderTextColor={AppColors.textLight}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
-                  <TouchableOpacity
-                    style={[s.ctaBtn, { height: 44, paddingHorizontal: 16, justifyContent: 'center', alignItems: 'center' }]}
-                    onPress={() => {
-                      const email = inviteEmail.trim();
-                      if (!email) {
-                        Alert.alert('Empty Email', 'Please enter an email address.');
-                        return;
-                      }
-                      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                      if (!emailRegex.test(email)) {
-                        Alert.alert('Invalid Email', 'Please enter a valid email address.');
-                        return;
-                      }
-                      if (selectedInvitees.some(inv => inv.email.toLowerCase() === email.toLowerCase())) {
-                        Alert.alert('Already Added', 'This email is already in the invite list.');
-                        return;
-                      }
-                      const defaultRole = availableRoles.find(r => r.name === 'VIEWER_ASSO') || availableRoles[0];
-                      setSelectedInvitees(prev => [
-                        ...prev,
-                        {
-                          type: 'email',
-                          email: email,
-                          name: email,
-                          role_id: inviteRoleId || (defaultRole ? String(defaultRole.id) : ''),
-                        }
-                      ]);
-                      setInviteEmail('');
-                    }}
-                  >
-                    <Text style={s.ctaBtnText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Selected Invitees List */}
-              {selectedInvitees.length > 0 && (
-                <View style={{ marginBottom: 16 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 8 }}>
-                    Selected Invitees ({selectedInvitees.length})
-                  </Text>
-                  <View style={{ backgroundColor: '#F9FAFB', borderRadius: 8, padding: 8 }}>
-                    {selectedInvitees.map((invitee, idx) => {
-                      const roleObj = availableRoles.find(r => String(r.id) === String(invitee.role_id));
-                      const roleLabel = roleObj ? (ROLE_DISPLAY_NAMES[roleObj.name] || roleObj.name) : 'Select Role';
-                      return (
-                        <View
-                          key={idx}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            paddingVertical: 8,
-                            borderBottomWidth: idx < selectedInvitees.length - 1 ? 1 : 0,
-                            borderBottomColor: '#F3F4F6',
-                          }}
-                        >
-                          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-                            {invitee.type === 'user' ? (
-                              invitee.avatar ? (
-                                <Image source={{ uri: resolveUrl(invitee.avatar) }} style={{ width: 28, height: 28, borderRadius: 14 }} />
-                              ) : (
-                                <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#E6F4EA', justifyContent: 'center', alignItems: 'center' }}>
-                                  <Text style={{ fontSize: 11, fontWeight: '700', color: AppColors.primary }}>{(invitee.name || '?')[0].toUpperCase()}</Text>
-                                </View>
-                              )
-                            ) : (
-                              <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center' }}>
-                                <Ionicons name="mail" size={14} color="#2563EB" />
-                              </View>
-                            )}
-                            <View style={{ flex: 1, marginLeft: 8 }}>
-                              <Text style={{ fontSize: 13, fontWeight: '600', color: AppColors.textDark }} numberOfLines={1}>
-                                {invitee.name}
-                              </Text>
-                              {invitee.type === 'user' && (
-                                <Text style={{ fontSize: 10, color: AppColors.textMedium }} numberOfLines={1}>
-                                  {invitee.email}
-                                </Text>
-                              )}
-                            </View>
-                          </View>
-
-                          <TouchableOpacity
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              backgroundColor: '#E5E7EB',
-                              paddingHorizontal: 8,
-                              paddingVertical: 4,
-                              borderRadius: 6,
-                              marginRight: 8,
-                            }}
-                            onPress={() => setRolePickerIndex(idx)}
-                          >
-                            <Text style={{ fontSize: 11, fontWeight: '600', color: AppColors.textDark, marginRight: 4 }}>
-                              {roleLabel}
-                            </Text>
-                            <Ionicons name="chevron-down" size={10} color={AppColors.textMedium} />
-                          </TouchableOpacity>
-
-                          <TouchableOpacity
-                            onPress={() => {
-                              setSelectedInvitees(prev => prev.filter((_, i) => i !== idx));
-                            }}
-                          >
-                            <Ionicons name="trash-outline" size={16} color={AppColors.error} />
-                          </TouchableOpacity>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-              )}
-
-              {/* Invitation Message */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Custom Invitation Message
-                </Text>
-                <TextInput
-                  style={[s.modalInput, { height: 70 }]}
-                  value={inviteMessage}
-                  onChangeText={setInviteMessage}
-                  placeholder="Welcome to our eco association!"
-                  placeholderTextColor={AppColors.textLight}
-                  multiline
-                  numberOfLines={2}
-                  textAlignVertical="top"
-                />
-              </View>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[s.ctaBtn, { width: '100%', marginTop: 12 }]}
-              onPress={async () => {
-                if (selectedInvitees.length === 0) {
-                  Alert.alert('Required field missing', 'Please select at least one user or add an email to invite.');
-                  return;
-                }
-                setActionLoading(true);
-                try {
-                  const invitations = selectedInvitees.map(inv => {
-                    if (inv.type === 'user') {
-                      return { user_id: inv.id, role_id: Number(inv.role_id) };
-                    } else {
-                      return { email: inv.email, role_id: Number(inv.role_id) };
-                    }
-                  });
-
-                  await associationService.sendInvitations(assoc.id, invitations, inviteMessage);
-                  Alert.alert('🎉 Sent!', 'Invitations sent successfully!');
-                  setInviteVisible(false);
-                  setSelectedInvitees([]);
-                  setInviteEmail('');
-                  setInviteMessage('');
-                } catch (e: any) {
-                  Alert.alert('Error', e.message || 'Failed to send invitations.');
-                } finally {
-                  setActionLoading(false);
-                }
-              }}
-              disabled={actionLoading}
-            >
-              {actionLoading ? <ActivityIndicator color="white" /> : <Text style={s.ctaBtnText}>Send Invitations</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* ── Role Picker Modal for Invitees ── */}
-        <Modal visible={rolePickerIndex !== null} transparent animationType="fade" onRequestClose={() => setRolePickerIndex(null)}>
-          <View style={s.modalOverlay}>
-            <View style={[s.modalSheet, { maxHeight: '60%' }]}>
-              <View style={s.modalHeader}>
-                <Text style={s.modalTitle}>Select Role</Text>
-                <TouchableOpacity onPress={() => setRolePickerIndex(null)}>
-                  <Ionicons name="close" size={24} color={AppColors.textDark} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-                {availableRoles
-                  .filter(r => {
-                    if (r.name === 'ADMIN_ASSO') {
-                      return role === 'ADMIN_ASSO' || role === 'creator';
-                    }
-                    return true;
-                  })
-                  .map(role => {
-                  const isSelected = rolePickerIndex !== null && String(selectedInvitees[rolePickerIndex]?.role_id) === String(role.id);
-                  return (
-                    <TouchableOpacity
-                      key={role.id}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingVertical: 14,
-                        borderBottomWidth: 1,
-                        borderBottomColor: '#F3F4F6',
-                      }}
-                      onPress={() => {
-                        if (rolePickerIndex !== null) {
-                          setSelectedInvitees(prev => prev.map((item, i) => i === rolePickerIndex ? { ...item, role_id: String(role.id) } : item));
-                          setRolePickerIndex(null);
-                        }
-                      }}
-                    >
-                      <Ionicons
-                        name={isSelected ? "radio-button-on" : "radio-button-off"}
-                        size={20}
-                        color={isSelected ? AppColors.primary : AppColors.textMedium}
-                      />
-                      <Text style={{ marginLeft: 12, fontSize: 15, fontWeight: isSelected ? '700' : '500', color: isSelected ? AppColors.primary : AppColors.textDark }}>
-                        {ROLE_DISPLAY_NAMES[role.name] || role.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
-      </Modal>
+      <AssociationInviteModal
+        visible={inviteVisible}
+        associationId={assoc.id}
+        associationName={assoc.name}
+        onClose={() => setInviteVisible(false)}
+        onSuccess={() => {
+          loadAssociation();
+        }}
+      />
 
       {/* ── Admin Transfer Modal ── */}
       <Modal
@@ -2142,7 +1879,7 @@ export const AssociationDetailScreen = () => {
                   </View>
                   <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
                     <Text style={{ fontSize: 13, color: AppColors.textDark }}>
-                      Joined: <Text style={{ fontWeight: '700' }}>{new Date(selectedMember.joined_at).toLocaleDateString()}</Text>
+                      Joined: <Text style={{ fontWeight: '700' }}>{formatDate(selectedMember.joined_at)}</Text>
                     </Text>
                   </View>
                 </View>
@@ -2186,30 +1923,30 @@ export const AssociationDetailScreen = () => {
                   return true;
                 })
                 .map(roleItem => {
-                const isSelected = selectedMemberRole?.id === roleItem.id;
-                return (
-                  <TouchableOpacity
-                    key={roleItem.id}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingVertical: 14,
-                      borderBottomWidth: 1,
-                      borderBottomColor: '#F3F4F6',
-                    }}
-                    onPress={() => setSelectedMemberRole(roleItem)}
-                  >
-                    <Ionicons
-                      name={isSelected ? "radio-button-on" : "radio-button-off"}
-                      size={20}
-                      color={isSelected ? AppColors.primary : AppColors.textMedium}
-                    />
-                    <Text style={{ marginLeft: 12, fontSize: 15, fontWeight: isSelected ? '700' : '500', color: isSelected ? AppColors.primary : AppColors.textDark }}>
-                      {ROLE_DISPLAY_NAMES[roleItem.name] || roleItem.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+                  const isSelected = selectedMemberRole?.id === roleItem.id;
+                  return (
+                    <TouchableOpacity
+                      key={roleItem.id}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingVertical: 14,
+                        borderBottomWidth: 1,
+                        borderBottomColor: '#F3F4F6',
+                      }}
+                      onPress={() => setSelectedMemberRole(roleItem)}
+                    >
+                      <Ionicons
+                        name={isSelected ? "radio-button-on" : "radio-button-off"}
+                        size={20}
+                        color={isSelected ? AppColors.primary : AppColors.textMedium}
+                      />
+                      <Text style={{ marginLeft: 12, fontSize: 15, fontWeight: isSelected ? '700' : '500', color: isSelected ? AppColors.primary : AppColors.textDark }}>
+                        {ROLE_DISPLAY_NAMES[roleItem.name] || roleItem.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
             </View>
 
             <TouchableOpacity
@@ -2363,184 +2100,14 @@ export const AssociationDetailScreen = () => {
         </View>
       </Modal>
 
-      {/* ── Create Event Modal ── */}
-      <Modal visible={createEventVisible} animationType="slide" transparent onRequestClose={() => setCreateEventVisible(false)}>
-        <View style={s.modalOverlay}>
-          <View style={[s.modalSheet, { height: '80%' }]}>
-            <View style={s.modalHeader}>
-              <Text style={s.modalTitle}>Create New Event</Text>
-              <TouchableOpacity onPress={() => setCreateEventVisible(false)}>
-                <Ionicons name="close" size={24} color={AppColors.textDark} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-              {/* Event Title */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Event Title *
-                </Text>
-                <TextInput
-                  style={[s.modalInput, { height: 44, paddingVertical: 10 }]}
-                  value={eventTitle}
-                  onChangeText={setEventTitle}
-                  placeholder="e.g. Tree Planting Drive"
-                  placeholderTextColor={AppColors.textLight}
-                />
-              </View>
-
-              {/* Event Description */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Event Description
-                </Text>
-                <TextInput
-                  style={s.modalInput}
-                  value={eventDesc}
-                  onChangeText={setEventDesc}
-                  placeholder="Details about the event..."
-                  placeholderTextColor={AppColors.textLight}
-                  multiline
-                  numberOfLines={4}
-                  textAlignVertical="top"
-                />
-              </View>
-
-              {/* Event Location */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                  Location *
-                </Text>
-                <TextInput
-                  style={[s.modalInput, { height: 44, paddingVertical: 10 }]}
-                  value={eventLocation}
-                  onChangeText={setEventLocation}
-                  placeholder="e.g. Central Park Green Sector"
-                  placeholderTextColor={AppColors.textLight}
-                />
-              </View>
-
-              {/* Start & End Date */}
-              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                    Start Date/Time *
-                  </Text>
-                  <TextInput
-                    style={[s.modalInput, { height: 44, paddingVertical: 10 }]}
-                    value={eventStartTime}
-                    onChangeText={setEventStartTime}
-                    placeholder="YYYY-MM-DD HH:MM"
-                    placeholderTextColor={AppColors.textLight}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                    End Date/Time
-                  </Text>
-                  <TextInput
-                    style={[s.modalInput, { height: 44, paddingVertical: 10 }]}
-                    value={eventEndTime}
-                    onChangeText={setEventEndTime}
-                    placeholder="YYYY-MM-DD HH:MM"
-                    placeholderTextColor={AppColors.textLight}
-                  />
-                </View>
-              </View>
-
-              {/* Max Attendees & Event Type */}
-              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12, alignItems: 'center' }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                    Max Attendees
-                  </Text>
-                  <TextInput
-                    style={[s.modalInput, { height: 44, paddingVertical: 10 }]}
-                    value={eventMaxAttendees}
-                    onChangeText={setEventMaxAttendees}
-                    placeholder="e.g. 50"
-                    placeholderTextColor={AppColors.textLight}
-                    keyboardType="numeric"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '700', color: AppColors.textMedium, marginBottom: 6 }}>
-                    Event Type
-                  </Text>
-                  <View style={{ flexDirection: 'row', gap: 6 }}>
-                    <TouchableOpacity
-                      style={[{ flex: 1, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' }, eventType === 'in_person' && { borderColor: AppColors.primary, backgroundColor: AppColors.primary + '10' }]}
-                      onPress={() => setEventType('in_person')}
-                    >
-                      <Text style={[{ fontSize: 12, color: AppColors.textDark, fontWeight: '600' }, eventType === 'in_person' && { color: AppColors.primary, fontWeight: '700' }]}>Physical</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[{ flex: 1, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' }, eventType === 'online' && { borderColor: AppColors.primary, backgroundColor: AppColors.primary + '10' }]}
-                      onPress={() => setEventType('online')}
-                    >
-                      <Text style={[{ fontSize: 12, color: AppColors.textDark, fontWeight: '600' }, eventType === 'online' && { color: AppColors.primary, fontWeight: '700' }]}>Online</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[s.ctaBtn, { width: '100%', marginTop: 12 }]}
-              onPress={async () => {
-                if (!eventTitle.trim()) {
-                  Alert.alert('Required field missing', 'Please enter Event Title.');
-                  return;
-                }
-                if (!eventLocation.trim()) {
-                  Alert.alert('Required field missing', 'Please enter Location.');
-                  return;
-                }
-                if (!eventStartTime.trim()) {
-                  Alert.alert('Required field missing', 'Please enter Start Time.');
-                  return;
-                }
-                setActionLoading(true);
-                try {
-                  const data: any = {
-                    title: eventTitle,
-                    description: eventDesc,
-                    location: eventLocation,
-                    start_time: eventStartTime,
-                    end_time: eventEndTime || undefined,
-                    max_attendees: eventMaxAttendees ? Number(eventMaxAttendees) : undefined,
-                    event_type: eventType
-                  };
-                  await associationService.createEvent(assoc.id, data);
-                  Alert.alert('🎉 Created!', 'Eco event created successfully!');
-                  setCreateEventVisible(false);
-                  setEventTitle('');
-                  setEventDesc('');
-                  setEventLocation('');
-                  setEventStartTime('');
-                  setEventEndTime('');
-                  setEventMaxAttendees('');
-                  loadEvents();
-                } catch (e: any) {
-                  Alert.alert('Error', e.message || 'Failed to create event.');
-                } finally {
-                  setActionLoading(false);
-                }
-              }}
-              disabled={actionLoading}
-            >
-              {actionLoading ? <ActivityIndicator color="white" /> : <Text style={s.ctaBtnText}>Create Event</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Local Create Event Modal removed in favor of navigation */}
 
       {/* ── Premium Association Settings Modal ── */}
       <Modal visible={settingsVisible} animationType="slide" transparent={false} onRequestClose={() => setSettingsVisible(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+        <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: insets.top }}>
           {/* Header */}
           <View style={[s.stickyHeader, { position: 'relative', borderBottomWidth: 1, borderBottomColor: '#F0F0F0', shadowOpacity: 0 }]}>
-            <TouchableOpacity onPress={() => setSettingsVisible(false)} style={s.stickyBackBtn}>
+            <TouchableOpacity onPress={() => setSettingsVisible(false)} style={s.stickyBackBtn} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
               <Ionicons name="close" size={24} color={AppColors.textDark} />
             </TouchableOpacity>
             <Text style={s.stickyTitle}>Settings Panel</Text>
@@ -2898,7 +2465,7 @@ export const AssociationDetailScreen = () => {
               )}
             </View>
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {/* ── Transfer History Modal ── */}
@@ -2964,7 +2531,7 @@ export const AssociationDetailScreen = () => {
                           Receiver: <Text style={{ fontWeight: '700' }}>{item.receiver?.full_name || item.email}</Text>
                         </Text>
                         <Text style={{ fontSize: 11, color: AppColors.textLight }}>
-                          Requested on {new Date(item.created_at).toLocaleString()}
+                          Requested on {parseSafeDate(item.created_at)?.toLocaleString() || 'N/A'}
                         </Text>
                       </View>
 
@@ -3029,7 +2596,7 @@ const s = StyleSheet.create({
     flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700',
     color: AppColors.textDark, marginHorizontal: 8,
   },
-  stickyFollowBtn: { padding: 6 },
+  stickyFollowBtn: { padding: 10 },
 
   // Hero
   heroWrapper: { height: HEADER_HEIGHT, overflow: 'hidden', position: 'relative' },
@@ -3114,6 +2681,24 @@ const s = StyleSheet.create({
   tabBtnText: { fontSize: 12, fontWeight: '600', color: AppColors.textMedium },
   tabBtnTextActive: { color: AppColors.primary, fontWeight: '800' },
   tabContent: { padding: 14, gap: 12 },
+  fabCreateEvent: {
+    position: 'absolute',
+    bottom: 16,
+    right: 16,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: AppColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    zIndex: 100,
+  },
+
 
   // Invitation banner
   invitationBanner: {

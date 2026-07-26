@@ -468,6 +468,100 @@ class AuthService {
       };
     }
   }
+
+  // Update user profile data
+  public async updateProfileData(data: {
+    fullName?: string;
+    pseudo?: string;
+    bio?: string;
+    location?: string;
+    website?: string;
+    birth_date?: string;
+  }): Promise<AuthResult> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.put(`${this.baseUrl}/users/me/update-user`, {
+        full_name: data.fullName,
+        pseudo: data.pseudo,
+        bio: data.bio,
+        location: data.location,
+        website: data.website,
+        birth_date: data.birth_date,
+      }, {
+        headers,
+        timeout: 10000,
+      });
+
+      const resData = response.data;
+      if (response.status === 200 && resData.data) {
+        const user = parseUserFromJson(resData.data);
+        await this.saveUser(user);
+        return {
+          success: true,
+          user,
+          message: resData.message || 'Profile updated successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: resData.message || 'Failed to update profile',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Update profile data error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Upload profile image
+  public async uploadProfileImage(uri: string): Promise<AuthResult> {
+    try {
+      const headers = await this.getHeaders();
+      
+      const formData = new FormData();
+      const filename = uri.split('/').pop() || 'avatar.jpg';
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : `image/jpeg`;
+      
+      formData.append('profile_image', {
+        uri,
+        name: filename,
+        type,
+      } as any);
+
+      const response = await axios.post(`${this.baseUrl}/users/me/profile-image`, formData, {
+        headers: {
+          ...headers,
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 15000,
+      });
+
+      const resData = response.data;
+      if (response.status === 200 && resData.data) {
+        return {
+          success: true,
+          message: resData.data.message || 'Profile image uploaded successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: resData.message || 'Failed to upload image',
+        };
+      }
+    } catch (error: any) {
+      console.error('❌ Upload profile image error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
 }
 
 export default new AuthService();

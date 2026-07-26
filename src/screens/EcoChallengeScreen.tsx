@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,6 +9,7 @@ import {
   Alert,
   FlatList,
   Dimensions,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
@@ -99,6 +100,14 @@ export const EcoChallengeScreen = () => {
   const [challenges, setChallenges] = useState<Challenge[]>(MOCK_CHALLENGES);
   const [claimedIds, setClaimedIds] = useState<string[]>([]);
   const [streak, setStreak] = useState(5);
+
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const HEADER_HEIGHT = 60 + insets.top;
+  const headerTranslateY = Animated.diffClamp(scrollY, 0, HEADER_HEIGHT).interpolate({
+    inputRange: [0, HEADER_HEIGHT],
+    outputRange: [0, -HEADER_HEIGHT],
+  });
 
   const handleClaim = (item: Challenge) => {
     if (claimedIds.includes(item.id)) return;
@@ -208,7 +217,21 @@ export const EcoChallengeScreen = () => {
   return (
     <View style={styles.container}>
       {/* Top Header Navbar */}
-      <View style={[styles.header, { paddingTop: insets.top, height: 60 + insets.top }]}>
+      <Animated.View
+        style={[
+          styles.header,
+          {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            paddingTop: insets.top,
+            height: 60 + insets.top,
+            transform: [{ translateY: headerTranslateY }],
+          },
+        ]}
+      >
         <View style={styles.headerSpacer} />
         <Text style={styles.headerTitle}>Eco Challenges</Text>
         <TouchableOpacity
@@ -217,9 +240,17 @@ export const EcoChallengeScreen = () => {
         >
           <Ionicons name="help-circle-outline" size={24} color={AppColors.textDark} />
         </TouchableOpacity>
-      </View>
+      </Animated.View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <Animated.ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingTop: 60 + insets.top }]}
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      >
         {/* Dynamic Game Dashboard */}
         <View style={styles.dashboardCard}>
           <Image
@@ -239,7 +270,7 @@ export const EcoChallengeScreen = () => {
                   </View>
                 </View>
               </View>
-
+ 
               {/* Daily Streak */}
               <View style={styles.streakCard}>
                 <Ionicons name="flame" size={28} color="#FF9800" />
@@ -247,7 +278,7 @@ export const EcoChallengeScreen = () => {
                 <Text style={styles.streakLabel}>Streak</Text>
               </View>
             </View>
-
+ 
             {/* EXP Bar */}
             <View style={styles.xpSection}>
               <View style={styles.xpHeader}>
@@ -258,7 +289,7 @@ export const EcoChallengeScreen = () => {
                 <View style={[styles.xpBarFill, { width: `${Math.min(((user?.xp ?? 0) / 1200) * 100, 100)}%` }]} />
               </View>
             </View>
-
+ 
             {/* Score Stats */}
             <View style={styles.scoreRow}>
               <View style={styles.scoreBox}>
@@ -279,7 +310,7 @@ export const EcoChallengeScreen = () => {
             </View>
           </View>
         </View>
-
+ 
         {/* Section Header */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>Active Challenges</Text>
@@ -287,7 +318,7 @@ export const EcoChallengeScreen = () => {
             <Text style={styles.seeAllText}>Rules</Text>
           </TouchableOpacity>
         </View>
-
+ 
         {/* Challenge list */}
         <FlatList
           data={challenges}
@@ -296,7 +327,7 @@ export const EcoChallengeScreen = () => {
           scrollEnabled={false} // Nested inside ScrollView
           contentContainerStyle={styles.listContent}
         />
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 };

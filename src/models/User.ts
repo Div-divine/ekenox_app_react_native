@@ -22,8 +22,11 @@ export interface User {
   emailVerifiedAt?: string;
 
   // Extended fields for social features
+  pseudo?: string;
   location?: string;
   bio?: string;
+  website?: string;
+  birth_date?: string;
   actionsCount: number;
   postsCount: number;
   groupsCount: number;
@@ -84,8 +87,11 @@ export function parseUserFromJson(json: any): User {
     emailVerifiedAt: json.email_verified_at,
     
     // Extended fields
+    pseudo: json.pseudo,
     location: json.location,
     bio: json.bio,
+    website: json.website,
+    birth_date: json.birth_date,
     actionsCount: json.actions_count ?? 0,
     postsCount: json.posts_count ?? 0,
     groupsCount: json.groups_count ?? 0,

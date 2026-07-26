@@ -49,7 +49,7 @@ export const MainTabNavigator = () => {
           styles.bottomTabBar,
           {
             paddingBottom: insets.bottom > 0 ? insets.bottom : 12,
-            height: Platform.OS === 'ios' ? 68 + insets.bottom : 74,
+            height: 60 + (insets.bottom > 0 ? insets.bottom : 12),
           },
         ]}
       >
@@ -112,8 +112,8 @@ const styles = StyleSheet.create({
   },
   iconContainer: {
     width: 44,
-    height: 30,
-    borderRadius: 15,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,

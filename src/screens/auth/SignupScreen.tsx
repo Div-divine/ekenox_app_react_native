@@ -15,6 +15,7 @@ import {
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { AppColors } from '../../theme/colors';
+import { useSocialAuth } from '../../hooks/useSocialAuth';
 
 interface SignupScreenProps {
   navigation: any;
@@ -22,6 +23,7 @@ interface SignupScreenProps {
 
 export const SignupScreen = ({ navigation }: SignupScreenProps) => {
   const { signup } = useAuth();
+  const { googleSignIn, facebookSignIn, isLoading: isSocialLoading } = useSocialAuth();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -72,10 +74,6 @@ export const SignupScreen = ({ navigation }: SignupScreenProps) => {
     }
   };
 
-  const handleSocialLogin = (provider: string) => {
-    Alert.alert('Social Auth', `${provider} signup is not configured yet in this client.`);
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
@@ -86,34 +84,30 @@ export const SignupScreen = ({ navigation }: SignupScreenProps) => {
           <View style={styles.card}>
             <Text style={styles.title}>Sign Up</Text>
 
-            {/* Social Media Row */}
+            {/* Social Media Row — Google & Facebook only */}
             <View style={styles.socialRow}>
               <TouchableOpacity
                 style={[styles.socialButton, { backgroundColor: '#db4437' }]}
-                onPress={() => handleSocialLogin('Google')}
+                onPress={googleSignIn}
+                disabled={isSocialLoading}
               >
-                <FontAwesome name="google" size={20} color="white" />
+                {isSocialLoading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <FontAwesome name="google" size={20} color="white" />
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.socialButton, { backgroundColor: '#3b5998' }]}
-                onPress={() => handleSocialLogin('Facebook')}
+                onPress={facebookSignIn}
+                disabled={isSocialLoading}
               >
-                <FontAwesome name="facebook" size={20} color="white" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.socialButton, { backgroundColor: '#1da1f2' }]}
-                onPress={() => handleSocialLogin('Twitter')}
-              >
-                <FontAwesome name="twitter" size={20} color="white" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.socialButton, { backgroundColor: '#c13584' }]}
-                onPress={() => handleSocialLogin('Instagram')}
-              >
-                <FontAwesome name="instagram" size={20} color="white" />
+                {isSocialLoading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <FontAwesome name="facebook" size={20} color="white" />
+                )}
               </TouchableOpacity>
             </View>
 
@@ -262,13 +256,14 @@ const styles = StyleSheet.create({
   },
   socialRow: {
     flexDirection: 'row',
-    justifyContent: 'space-evenly',
+    justifyContent: 'center',
+    gap: 16,
     marginBottom: 24,
   },
   socialButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 8,
+    width: 56,
+    height: 56,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 2,

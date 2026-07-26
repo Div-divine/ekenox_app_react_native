@@ -17,6 +17,9 @@ import {
   Modal,
   Clipboard,
   Dimensions,
+  Share,
+  Linking,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
@@ -26,14 +29,270 @@ import feedService, { Feed, Group, Event } from '../services/feedService';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEventListener } from 'expo';
+import { useEventListener, useEvent } from 'expo';
 import { UrlHelper } from '../utils/urlHelper';
+import { CommentsScreen } from './CommentsScreen';
+import { FeedPollWidget } from './FeedPollWidget';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+const MUSIC_LIBRARY = [
+  { id: '1', title: 'Nature Whispers', singer: 'Green Harmony', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
+  { id: '2', title: 'Eco Beats', singer: 'DJ Earth', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3' },
+  { id: '3', title: 'Rainforest Ambient', singer: 'Forest Soundscape', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3' },
+  { id: '4', title: 'Ocean Waves', singer: 'Sea Breeze', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3' },
+  { id: '5', title: 'Solar Wind', singer: 'Future Sound', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3' },
+];
 
 // Cohesive Media URL Resolver leveraging the global UrlHelper utility
 const resolveMediaUrl = (url?: string) => {
   return UrlHelper.convertPathToUrl(url);
+};
+
+const isVideoUrl = (url?: string) => {
+  if (!url) return false;
+  const lowercase = url.toLowerCase();
+  return (
+    lowercase.endsWith('.mp4') ||
+    lowercase.endsWith('.mov') ||
+    lowercase.endsWith('.avi') ||
+    lowercase.endsWith('.mkv') ||
+    lowercase.endsWith('.webm') ||
+    lowercase.endsWith('.3gp') ||
+    lowercase.includes('/videos/')
+  );
+};
+
+const CARD_HEIGHT = SCREEN_HEIGHT * 0.78; // around 80vh
+
+const PostVideoPlayer = ({
+  videoUrl,
+  style,
+  shouldPlay,
+  isMuted,
+  onToggleMute
+}: {
+  videoUrl: string;
+  style: any;
+  shouldPlay: boolean;
+  isMuted: boolean;
+  onToggleMute: () => void;
+}) => {
+  const player = useVideoPlayer(videoUrl, p => {
+    p.loop = true;
+    p.muted = isMuted;
+  });
+
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing }) as any;
+  const { currentTime } = useEvent(player, 'timeUpdate', { currentTime: player.currentTime } as any) as any;
+  const { muted: isVideoMuted } = useEvent(player, 'mutedChange', { muted: player.muted }) as any;
+  const { volume: currentVolume } = useEvent(player, 'volumeChange', { volume: player.volume }) as any;
+
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimeoutRef = useRef<any>(null);
+
+  const resetControlsTimeout = useCallback(() => {
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+    }
+    if (isPlaying) {
+      controlsTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    }
+  }, [isPlaying]);
+
+  useEffect(() => {
+    resetControlsTimeout();
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    };
+  }, [isPlaying, resetControlsTimeout]);
+
+  useEffect(() => {
+    if (shouldPlay) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [shouldPlay, player]);
+
+  // Sync mute state from props
+  useEffect(() => {
+    player.muted = isMuted;
+  }, [isMuted, player]);
+
+  const togglePlay = () => {
+    if (isPlaying) {
+      player.pause();
+    } else {
+      player.play();
+    }
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const stopVideo = () => {
+    player.pause();
+    (player as any).seekTo(0);
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const seekBackward = () => {
+    player.seekBy(-10);
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const seekForward = () => {
+    player.seekBy(10);
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const increaseVolume = () => {
+    const newVolume = Math.min(1.0, player.volume + 0.1);
+    player.volume = newVolume;
+    if (player.muted && newVolume > 0) {
+      player.muted = false;
+    }
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const decreaseVolume = () => {
+    const newVolume = Math.max(0.0, player.volume - 0.1);
+    player.volume = newVolume;
+    if (player.muted && newVolume > 0) {
+      player.muted = false;
+    }
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const toggleLocalMute = () => {
+    player.muted = !player.muted;
+    setShowControls(true);
+    resetControlsTimeout();
+  };
+
+  const formatTime = (seconds: number) => {
+    if (isNaN(seconds) || seconds === null) return '00:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  const duration = player.duration || 0;
+  const [progressBarWidth, setProgressBarWidth] = useState(0);
+
+  const handleProgressBarTouch = (e: any) => {
+    if (progressBarWidth > 0 && duration > 0) {
+      const clickX = e.nativeEvent.locationX;
+      const percentage = clickX / progressBarWidth;
+      (player as any).seekTo(percentage * duration);
+    }
+  };
+
+  return (
+    <View style={style}>
+      <VideoView
+        player={player}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        nativeControls={false}
+      />
+
+      {/* Tap Overlay to show/hide controls */}
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowControls(!showControls)}
+        style={StyleSheet.absoluteFill}
+      />
+
+      {/* Modern Controls Overlay */}
+      {showControls && (
+        <View style={styles.controlsContainer}>
+          {/* Big Center Play/Pause Indicator */}
+          <View style={styles.centerPlayContainer}>
+            <TouchableOpacity onPress={togglePlay}>
+              <Ionicons
+                name={isPlaying ? "pause-circle" : "play-circle"}
+                size={64}
+                color="rgba(255,255,255,0.9)"
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom Controls Panel */}
+          <View style={styles.controlsPanel}>
+            {/* 1. Progress Bar */}
+            <View
+              style={styles.progressBarWrapper}
+              onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width)}
+              onTouchStart={handleProgressBarTouch}
+            >
+              <View style={styles.progressBarTrack}>
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    { width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }
+                  ]}
+                />
+              </View>
+            </View>
+
+            {/* 2. Controls Buttons Row */}
+            <View style={styles.controlsRow}>
+              {/* Left group: Play/Pause, Stop */}
+              <View style={styles.controlsGroup}>
+                <TouchableOpacity style={styles.controlBtn} onPress={togglePlay}>
+                  <Ionicons name={isPlaying ? "pause" : "play"} size={20} color="white" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.controlBtn} onPress={stopVideo}>
+                  <Ionicons name="square" size={16} color="white" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Center group: Seek -10s, Time, Seek +10s */}
+              <View style={styles.controlsGroup}>
+                <TouchableOpacity style={styles.controlBtn} onPress={seekBackward}>
+                  <Ionicons name="play-back" size={18} color="white" />
+                </TouchableOpacity>
+                <Text style={styles.timeText}>
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </Text>
+                <TouchableOpacity style={styles.controlBtn} onPress={seekForward}>
+                  <Ionicons name="play-forward" size={18} color="white" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Right group: Volume Icon, Volume Down, Volume Up */}
+              <View style={styles.controlsGroup}>
+                <TouchableOpacity style={styles.controlBtn} onPress={toggleLocalMute}>
+                  <Ionicons
+                    name={isVideoMuted || currentVolume === 0 ? "volume-mute" : currentVolume < 0.5 ? "volume-low" : "volume-high"}
+                    size={20}
+                    color="white"
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.controlBtn} onPress={decreaseVolume}>
+                  <Ionicons name="remove" size={16} color="white" />
+                </TouchableOpacity>
+                <Text style={styles.volumePercentText}>
+                  {isVideoMuted ? '0%' : `${Math.round(currentVolume * 100)}%`}
+                </Text>
+                <TouchableOpacity style={styles.controlBtn} onPress={increaseVolume}>
+                  <Ionicons name="add" size={16} color="white" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
 };
 
 
@@ -47,18 +306,111 @@ export const FeedScreen = () => {
   const [groups, setGroups] = useState<Group[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
 
+  // Feed pagination state
+  const [feedPage, setFeedPage] = useState(1);
+  const [hasMoreFeeds, setHasMoreFeeds] = useState(true);
+  const [loadingMoreFeeds, setLoadingMoreFeeds] = useState(false);
+
+  // Background music player
+  const bgMusicPlayer = useVideoPlayer(null, (p) => {
+    p.loop = true;
+  });
+
   // Dynamic Tip of the Day State
   const [dailyTip, setDailyTip] = useState<any>(null);
+
+  // Auto-play and global mute states
+  const postLayouts = useRef<{ [postId: string]: { y: number; height: number } }>({});
+  const postsListY = useRef(0);
+  const [activePostId, setActivePostId] = useState<string | null>(null);
+  const [isFeedMuted, setIsFeedMuted] = useState(true);
+
+  const loadMoreFeeds = async () => {
+    if (loadingMoreFeeds || !hasMoreFeeds) return;
+    setLoadingMoreFeeds(true);
+    try {
+      const nextPage = feedPage + 1;
+      const newFeeds = await feedService.getFeeds(nextPage, 10);
+      if (newFeeds && newFeeds.length > 0) {
+        setPosts(prev => [...prev, ...newFeeds]);
+        setFeedPage(nextPage);
+        setHasMoreFeeds(newFeeds.length === 10);
+      } else {
+        setHasMoreFeeds(false);
+      }
+    } catch (err) {
+      console.error('Failed to load more feeds:', err);
+    } finally {
+      setLoadingMoreFeeds(false);
+    }
+  };
+
+  const handleScroll = (event: any) => {
+    const scrollOffset = event.nativeEvent.contentOffset.y;
+    scrollY.setValue(scrollOffset);
+    const contentHeight = event.nativeEvent.contentSize.height;
+    const layoutHeight = event.nativeEvent.layoutMeasurement.height;
+
+    // Check if close to bottom
+    if (contentHeight - layoutHeight - scrollOffset < 300) {
+      loadMoreFeeds();
+    }
+
+    const centerY = scrollOffset + SCREEN_HEIGHT / 2.5; // Trigger play when post center reaches upper-middle of screen
+
+    let closestPostId = null;
+    let minDistance = Infinity;
+
+    Object.entries(postLayouts.current).forEach(([postId, layout]) => {
+      const postCenter = layout.y + layout.height / 2;
+      const distance = Math.abs(centerY - postCenter);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPostId = postId;
+      }
+    });
+
+    if (closestPostId && closestPostId !== activePostId) {
+      setActivePostId(closestPostId);
+    }
+  };
   const [tipExpanded, setTipExpanded] = useState(false);
   const [showTip, setShowTip] = useState(true);
 
   // Stories State
   const [stories, setStories] = useState<any[]>([]);
+  const [storyPage, setStoryPage] = useState(1);
+  const [hasMoreStories, setHasMoreStories] = useState(true);
+  const [loadingMoreStories, setLoadingMoreStories] = useState(false);
   const [storyModalVisible, setStoryModalVisible] = useState(false);
   const [selectedStoryIndex, setSelectedStoryIndex] = useState<number | null>(null);
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [storyVideoLoading, setStoryVideoLoading] = useState(false);
   const storyTimer = useRef<any | null>(null);
+  const isFirstMount = useRef(true);
+
+  // Story interaction state
+  const [isStoryPaused, setIsStoryPaused] = useState(false);
+  const [isMusicMuted, setIsMusicMuted] = useState(false);
+  const [storyLiked, setStoryLiked] = useState(false);
+  const [storyLikeCount, setStoryLikeCount] = useState(0);
+  const [storyReactions, setStoryReactions] = useState<Record<string, number>>({});
+  const [userReaction, setUserReaction] = useState<string | null>(null);
+  const [showStoryComments, setShowStoryComments] = useState(false);
+  const [storyComments, setStoryComments] = useState<any[]>([]);
+  const [storyCommentInput, setStoryCommentInput] = useState('');
+  const [storyCommentSending, setStoryCommentSending] = useState(false);
+  const [expandedReplyCommentId, setExpandedReplyCommentId] = useState<string | null>(null);
+  const [replyInputs, setReplyInputs] = useState<Record<string, string>>({});
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const storyViewRecorded = useRef<Record<string, boolean>>({});
+
+  const [storyLikesList, setStoryLikesList] = useState<any[]>([]);
+  const [storySharesList, setStorySharesList] = useState<any[]>([]);
+  const [showLikesModal, setShowLikesModal] = useState(false);
+  const [showSharesModal, setShowSharesModal] = useState(false);
+  const [storyLikesLoading, setStoryLikesLoading] = useState(false);
+  const [storySharesLoading, setStorySharesLoading] = useState(false);
 
   const player = useVideoPlayer(null, (p) => {
     p.loop = false;
@@ -72,18 +424,90 @@ export const FeedScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<string | number | null>(null);
 
+  // Comments Modal State
+  const [commentsModalVisible, setCommentsModalVisible] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState<string | number | null>(null);
+  const [commentsPostCount, setCommentsPostCount] = useState(0);
+
+  // Unread Notification Count State
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  // Custom Edit Post Modal State
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [editingPost, setEditingPost] = useState<Feed | null>(null);
+  const [editingTextState, setEditingTextState] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const HEADER_HEIGHT = 60 + insets.top;
+  const headerTranslateY = Animated.diffClamp(scrollY, 0, HEADER_HEIGHT).interpolate({
+    inputRange: [0, HEADER_HEIGHT],
+    outputRange: [0, -HEADER_HEIGHT],
+  });
+
+  const createBarTranslateY = Animated.diffClamp(scrollY, 0, 60).interpolate({
+    inputRange: [0, 60],
+    outputRange: [0, -60],
+  });
+
+  const START_Y = 197 + (showTip && dailyTip ? 150 : 0);
+  const absoluteBarOpacity = scrollY.interpolate({
+    inputRange: [START_Y - 20, START_Y],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  useEffect(() => {
+    scrollY.setValue(0);
+  }, [currentTab]);
+
+
+
+  const loadStories = async (page: number, isRefresh: boolean = false) => {
+    if (page === 1) {
+      try {
+        const list = await feedService.getStoryList(1, 6);
+        setStories(list);
+        setStoryPage(1);
+        setHasMoreStories(list.length === 6);
+      } catch (e) {
+        console.error('Error loading page 1 stories:', e);
+      }
+    } else {
+      if (loadingMoreStories || !hasMoreStories) return;
+      setLoadingMoreStories(true);
+      try {
+        const list = await feedService.getStoryList(page, 6);
+        if (list.length > 0) {
+          setStories(prev => [...prev, ...list]);
+          setStoryPage(page);
+          setHasMoreStories(list.length === 6);
+        } else {
+          setHasMoreStories(false);
+        }
+      } catch (e) {
+        console.error(`Error loading page ${page} stories:`, e);
+      } finally {
+        setLoadingMoreStories(false);
+      }
+    }
+  };
+
   // Fetch all live data from Symphony backend
-  const loadData = async () => {
+  const loadData = async (showLoadingIndicator = true) => {
     try {
+      if (showLoadingIndicator) setIsLoading(true);
       console.log('🔄 Fetching live data from Symfony backend...');
 
       // 1. Fetch Feeds
-      const feedPosts = await feedService.getFeeds(1, 20);
+      const feedPosts = await feedService.getFeeds(1, 10);
       setPosts(feedPosts);
+      setFeedPage(1);
+      setHasMoreFeeds(feedPosts.length === 10);
 
       // 2. Fetch Stories
-      const storiesList = await feedService.getStoryList(1, 15);
-      setStories(storiesList);
+      await loadStories(1, true);
 
       // 3. Fetch Tips
       const tipData = await feedService.getDailyTipToday();
@@ -95,6 +519,10 @@ export const FeedScreen = () => {
 
       // 5. Fetch Groups based on current filter
       await fetchGroupsData(groupActiveTab);
+
+      // 6. Fetch Unread Notifications Count
+      const count = await feedService.getUnreadNotificationsCount();
+      setUnreadNotifCount(count);
 
     } catch (error) {
       console.error('❌ Failed to fetch feed/groups/events data:', error);
@@ -113,9 +541,29 @@ export const FeedScreen = () => {
     }
   };
 
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const count = await feedService.getUnreadNotificationsCount();
+      setUnreadNotifCount(count);
+    } catch (err) {
+      console.warn('Failed to load unread count:', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (isFirstMount.current) {
+        isFirstMount.current = false;
+        return;
+      }
+      loadData(false);
+    });
+    return unsubscribe;
+  }, [navigation, groupActiveTab]);
 
   // Update groups list when group tabs change
   useEffect(() => {
@@ -212,29 +660,13 @@ export const FeedScreen = () => {
     }
   };
 
-  // Create post prompt
+  // Create post prompt (FAB)
   const handleCreateCTA = () => {
-    Alert.prompt(
-      'New Post',
-      'Share your eco initiative with Ekenox! 🌱',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Post',
-          onPress: async (content?: string) => {
-            if (!content || !content.trim()) return;
-            const result = await feedService.createFeed(content.trim());
-            if (result.success) {
-              Alert.alert('Success', 'Posted successfully!');
-              loadData();
-            } else {
-              Alert.alert('Error', result.message || 'Failed to post.');
-            }
-          },
-        },
-      ],
-      'plain-text'
-    );
+    if (currentTab === 0) {
+      navigation.navigate('CreatePost');
+    } else {
+      navigation.navigate('CreateGroup');
+    }
   };
 
   // Copy shareable link to Clipboard
@@ -242,6 +674,33 @@ export const FeedScreen = () => {
     const link = `${ApiConfig.baseUrl}/feeds/${postId}`;
     Clipboard.setString(link);
     Alert.alert('Copied!', 'Link copied to clipboard successfully.');
+  };
+
+  // Share post (native share sheet)
+  const handleSharePost = async (postId: string | number) => {
+    const link = `${ApiConfig.baseUrl}/feeds/${postId}`;
+    try {
+      const result = await Share.share({
+        message: `Check out this eco initiative on Ekenox: ${link}`,
+        url: link,
+      });
+      if (result.action === Share.sharedAction) {
+        setPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            const currentShares = p.stats?.shares ?? 0;
+            return {
+              ...p,
+              stats: p.stats ? { ...p.stats, shares: currentShares + 1 } : { reactions: p.likes_count, comments: p.comments_count, shares: currentShares + 1, views: 0 }
+            };
+          }
+          return p;
+        }));
+        await feedService.sharePost(postId);
+      }
+    } catch (e) {
+      console.log('Native share error, falling back to copy link:', e);
+      handleCopyLink(postId);
+    }
   };
 
   // Delete feed post
@@ -264,30 +723,32 @@ export const FeedScreen = () => {
     ]);
   };
 
-  // Edit feed post
+  // Edit feed post - custom cross-platform modal
   const handleEditPost = (post: Feed) => {
-    Alert.prompt(
-      'Edit Post',
-      'Update your eco action text:',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Update',
-          onPress: async (newText?: string) => {
-            if (!newText || !newText.trim()) return;
-            const success = await feedService.updateFeed(post.id, newText.trim());
-            if (success) {
-              Alert.alert('Updated', 'Post updated successfully!');
-              setPosts(prev => prev.map(p => p.id === post.id ? { ...p, content: newText.trim(), is_edited: true } : p));
-            } else {
-              Alert.alert('Error', 'Failed to update post.');
-            }
-          },
-        },
-      ],
-      'plain-text',
-      post.content
-    );
+    setEditingPost(post);
+    setEditingTextState(post.content);
+    setIsEditModalVisible(true);
+  };
+
+  // Save edit post
+  const handleSaveEdit = async () => {
+    if (!editingPost || !editingTextState.trim()) return;
+    setEditSubmitting(true);
+    try {
+      const success = await feedService.updateFeed(editingPost.id, editingTextState.trim());
+      if (success) {
+        Alert.alert('Updated', 'Post updated successfully!');
+        setPosts(prev => prev.map(p => p.id === editingPost.id ? { ...p, content: editingTextState.trim(), is_edited: true } : p));
+        setIsEditModalVisible(false);
+        setEditingPost(null);
+      } else {
+        Alert.alert('Error', 'Failed to update post.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'An error occurred while updating.');
+    } finally {
+      setEditSubmitting(false);
+    }
   };
 
   // Report feed post
@@ -319,7 +780,7 @@ export const FeedScreen = () => {
 
   // Options Menu sheet triggers
   const handleOpenPostOptions = (post: Feed) => {
-    const isMine = post.user?.id === user?.id || post.author?.id === user?.id;
+    const isMine = (post.user?.id && String(post.user.id) === String(user?.id)) || (post.author?.id && String(post.author.id) === String(user?.id));
 
     const options: any[] = [];
     if (isMine) {
@@ -385,13 +846,40 @@ export const FeedScreen = () => {
     setSelectedStoryIndex(index);
     setCurrentSlideIndex(0);
     setStoryModalVisible(true);
+    setShowStoryComments(false);
+    setStoryCommentInput('');
+    setStoryLiked(false);
+    setStoryLikeCount(stories[index]?.stats?.likes ?? 0);
+    setStoryReactions({});
+    setUserReaction(null);
+    setIsMusicMuted(false);
+    setIsStoryPaused(false);
+    setStoryLikesList([]);
+    setStorySharesList([]);
+    // Record view (once per story session)
+    const storyId = stories[index]?.id;
+    if (storyId && !storyViewRecorded.current[storyId]) {
+      storyViewRecorded.current[storyId] = true;
+      feedService.recordStoryView(storyId);
+    }
+    // Load reactions, likes, and shares lists
+    if (storyId) {
+      feedService.getStoryReactions(storyId).then(data => setStoryReactions(data || {}));
+      feedService.getStoryLikesList(storyId).then(data => setStoryLikesList(data || []));
+      feedService.getStorySharesList(storyId).then(data => setStorySharesList(data || []));
+    }
   };
 
   const closeStories = () => {
     if (storyTimer.current) clearTimeout(storyTimer.current);
+    bgMusicPlayer.pause();
     setStoryModalVisible(false);
     setSelectedStoryIndex(null);
     setCurrentSlideIndex(0);
+    setShowStoryComments(false);
+    setIsStoryPaused(false);
+    setStoryLikesList([]);
+    setStorySharesList([]);
   };
 
   const handleNextSlide = () => {
@@ -409,6 +897,119 @@ export const FeedScreen = () => {
     }
   };
 
+  // Story interaction handlers
+  const handleStoryLike = async () => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    const result = await feedService.toggleStoryLike(story.id);
+    setStoryLiked(result.liked);
+    setStoryLikeCount(result.like_count);
+    // Refresh likes list
+    const updatedLikes = await feedService.getStoryLikesList(story.id);
+    setStoryLikesList(updatedLikes || []);
+  };
+
+  const handleStoryReact = async (emoji: string) => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    await feedService.reactToStory(story.id, emoji);
+    setUserReaction(prev => prev === emoji ? null : emoji);
+    setShowReactionPicker(false);
+    // Refresh reaction counts
+    const updated = await feedService.getStoryReactions(story.id);
+    setStoryReactions(updated || {});
+  };
+
+  const handleStoryShare = async () => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    setIsStoryPaused(true);
+    try {
+      await feedService.shareStoryPost(story.id);
+      await Share.share({
+        title: story.title || 'Ekenox Story',
+        message: `Check out this Ekenox story: ${story.title || ''}\n${story.description || ''}`,
+      });
+      // Refresh story stats to show updated share count
+      story.stats.shares = (story.stats.shares || 0) + 1;
+    } catch (e) {
+      console.log('Error sharing story:', e);
+    } finally {
+      setIsStoryPaused(false);
+    }
+  };
+
+  const handleLoadStoryComments = async () => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    setIsStoryPaused(true);
+    const data = await feedService.getStoryComments(story.id);
+    setStoryComments(data?.comments ?? []);
+    setShowStoryComments(true);
+  };
+
+  const handleLoadLikesList = async () => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    setIsStoryPaused(true);
+    setStoryLikesLoading(true);
+    setShowLikesModal(true);
+    try {
+      const data = await feedService.getStoryLikesList(story.id);
+      setStoryLikesList(data || []);
+    } catch (e) {
+      console.log('Error loading likes list:', e);
+    } finally {
+      setStoryLikesLoading(false);
+    }
+  };
+
+  const handleLoadSharesList = async () => {
+    if (selectedStoryIndex === null) return;
+    const story = stories[selectedStoryIndex];
+    setIsStoryPaused(true);
+    setStorySharesLoading(true);
+    setShowSharesModal(true);
+    try {
+      const data = await feedService.getStorySharesList(story.id);
+      setStorySharesList(data || []);
+    } catch (e) {
+      console.log('Error loading shares list:', e);
+    } finally {
+      setStorySharesLoading(false);
+    }
+  };
+
+  const handleSendStoryComment = async () => {
+    if (selectedStoryIndex === null || storyCommentInput.trim() === '') return;
+    setStoryCommentSending(true);
+    const story = stories[selectedStoryIndex];
+    const newComment = await feedService.addStoryComment(story.id, storyCommentInput.trim());
+    if (newComment) {
+      setStoryComments(prev => [...prev, newComment]);
+      setStoryCommentInput('');
+    }
+    setStoryCommentSending(false);
+  };
+
+  const handleSendReply = async (commentId: string) => {
+    if (selectedStoryIndex === null) return;
+    const text = replyInputs[commentId]?.trim();
+    if (!text) return;
+    const story = stories[selectedStoryIndex];
+    const newReply = await feedService.addStoryCommentReply(story.id, commentId, text);
+    if (newReply) {
+      setStoryComments(prev => prev.map(c =>
+        String(c.id) === commentId
+          ? { ...c, replies: [...(c.replies || []), newReply] }
+          : c
+      ));
+      setReplyInputs(prev => ({ ...prev, [commentId]: '' }));
+    }
+  };
+
+
+
   // Advance to next slide when video plays to the end
   useEventListener(player, 'playToEnd', () => {
     handleNextSlide();
@@ -421,8 +1022,9 @@ export const FeedScreen = () => {
 
   // Sync the player source dynamically with the active slide mediaUrl
   useEffect(() => {
-    if (!storyModalVisible || selectedStoryIndex === null) {
+    if (!storyModalVisible || selectedStoryIndex === null || isStoryPaused) {
       player.pause();
+      bgMusicPlayer.pause();
       return;
     }
 
@@ -435,6 +1037,22 @@ export const FeedScreen = () => {
     const isVideo = activeSlide
       ? activeSlide.media_type === 'video' || isVideoUrl(activeSlide.media_url || activeSlide.mediaUrl)
       : isVideoUrl(activeStory.video_url || activeStory.videoUrl);
+
+    // Dynamic background music sync — prefer real uploaded music_url, fallback to preset library
+    const musicUrl = activeStory.music_url ||
+      (activeStory.selected_music
+        ? MUSIC_LIBRARY.find((t) => t.title === activeStory.selected_music)?.url
+        : null);
+
+    if (musicUrl && !isMusicMuted) {
+      bgMusicPlayer.replaceAsync(resolveMediaUrl(musicUrl)).then(() => {
+        if (!isStoryPaused) bgMusicPlayer.play();
+      });
+      player.muted = true;
+    } else {
+      bgMusicPlayer.pause();
+      player.muted = false;
+    }
 
     if (isVideo) {
       const mediaUrl = resolveMediaUrl(
@@ -449,13 +1067,13 @@ export const FeedScreen = () => {
 
       if (mediaUrl) {
         player.replaceAsync(mediaUrl).then(() => {
-          player.play();
+          if (!isStoryPaused) player.play();
         });
       }
     } else {
       player.pause();
     }
-  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex]);
+  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex, isMusicMuted, isStoryPaused]);
 
   const handlePrevSlide = () => {
     if (selectedStoryIndex === null) return;
@@ -471,23 +1089,9 @@ export const FeedScreen = () => {
     }
   };
 
-  const isVideoUrl = (url?: string) => {
-    if (!url) return false;
-    const lowercase = url.toLowerCase();
-    return (
-      lowercase.endsWith('.mp4') ||
-      lowercase.endsWith('.mov') ||
-      lowercase.endsWith('.avi') ||
-      lowercase.endsWith('.mkv') ||
-      lowercase.endsWith('.webm') ||
-      lowercase.endsWith('.3gp') ||
-      lowercase.includes('/videos/')
-    );
-  };
-
   // Reactive Stories slideshow controller
   useEffect(() => {
-    if (!storyModalVisible || selectedStoryIndex === null) {
+    if (!storyModalVisible || selectedStoryIndex === null || isStoryPaused) {
       if (storyTimer.current) clearTimeout(storyTimer.current);
       return;
     }
@@ -518,50 +1122,98 @@ export const FeedScreen = () => {
     return () => {
       if (storyTimer.current) clearTimeout(storyTimer.current);
     };
-  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex]);
+  }, [storyModalVisible, selectedStoryIndex, currentSlideIndex, isStoryPaused]);
 
 
+
+  const renderStorySkeleton = () => {
+    if (!loadingMoreStories) return null;
+    return (
+      <View style={{ flexDirection: 'row' }}>
+        {[1, 2].map((i) => (
+          <View key={i} style={[styles.storyCard, { opacity: 0.6, backgroundColor: '#E0E0E0', justifyContent: 'center', alignItems: 'center' }]}>
+            <ActivityIndicator size="small" color={AppColors.primary} />
+          </View>
+        ))}
+      </View>
+    );
+  };
+
+  const renderCreateStoryHeader = () => {
+    const userAvatar = user?.profileImage ? resolveMediaUrl(user.profileImage) : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
+    return (
+      <TouchableOpacity
+        style={styles.storyCard}
+        onPress={() => navigation.navigate('CreateStory')}
+        activeOpacity={0.85}
+      >
+        <Image source={{ uri: userAvatar }} style={[styles.storyCardBg, { height: '100%' }]} blurRadius={1} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
+        
+        <View style={styles.storyCardOverlay}>
+          <Ionicons name="add" size={14} color="white" />
+        </View>
+
+        <View style={styles.createStoryCardCenter}>
+          <View style={styles.createStoryIconCircle}>
+            <Ionicons name="camera" size={16} color="white" />
+          </View>
+          <Text style={styles.createStoryCardText}>
+            Add Story
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   // Render Horizontal Story Cards matching Flutter design
   const renderStoryItem = ({ item, index }: { item: any; index: number }) => {
-    const userAvatar = item.user?.profile_image || item.user?.avatar_url || item.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
     const thumbnailUrl = item.thumbnail_url || item.thumbnailUrl || (item.slides?.[0]?.media_url || item.slides?.[0]?.mediaUrl);
+    const userAvatar = item.user?.profile_image || item.user?.avatar_url || item.userAvatar || thumbnailUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
     const username = item.user?.full_name || item.username || 'Champion';
 
     return (
       <TouchableOpacity style={styles.storyCard} onPress={() => handleOpenStories(index)} activeOpacity={0.85}>
         {thumbnailUrl ? (
-          <Image source={{ uri: resolveMediaUrl(thumbnailUrl) }} style={styles.storyCardBg} />
+          <Image source={{ uri: resolveMediaUrl(thumbnailUrl) }} style={[styles.storyCardBg, { height: '100%' }]} />
         ) : (
-          <View style={[styles.storyCardBg, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
-            <Ionicons name="play-circle" size={40} color={AppColors.primary} />
+          <View style={[styles.storyCardBg, { height: '100%', backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
+            <Ionicons name="play" size={24} color={AppColors.primary} />
           </View>
         )}
-        <View style={styles.storyCardOverlay} />
-
-        <View style={styles.storyCardAvatarRing}>
-          <Image source={{ uri: resolveMediaUrl(userAvatar) }} style={styles.storyCardAvatar} />
+        <View style={styles.storyCardOverlay}>
+          <Ionicons name="play-outline" size={12} color="white" />
         </View>
 
-        <Text style={styles.storyCardName} numberOfLines={2}>
-          {username}
-        </Text>
+        <View style={styles.storyCardUserInfo}>
+          <Image source={{ uri: resolveMediaUrl(userAvatar) }} style={styles.storyCardAvatar} />
+          <Text style={styles.storyCardName} numberOfLines={1}>
+            {username}
+          </Text>
+        </View>
       </TouchableOpacity>
     );
   };
 
-  // Render single post item
   const renderPostCard = (post: Feed) => {
     const authorName = post.user?.full_name || post.author?.full_name || 'Anonymous';
     const authorImage = post.user?.profile_image || post.user?.avatar_url || post.author?.profile_image;
     const isLiked = post.is_liked || post.user_reacted;
     const reactions = post.stats?.reactions ?? post.likes_count ?? 0;
     const comments = post.stats?.comments ?? post.comments_count ?? 0;
+    const hasMedia = post.media && post.media.length > 0;
 
     return (
-      <View key={post.id} style={styles.postCard}>
+      <View
+        key={post.id}
+        style={[styles.postCard, hasMedia ? { minHeight: CARD_HEIGHT } : null]}
+        onLayout={event => {
+          const { y, height } = event.nativeEvent.layout;
+          postLayouts.current[post.id.toString()] = { y: y + postsListY.current, height };
+        }}
+      >
         {/* Author details */}
-        <View style={styles.postAuthorRow}>
+        <View style={[styles.postAuthorRow, { paddingHorizontal: 16 }]}>
           {authorImage ? (
             <Image source={{ uri: resolveMediaUrl(authorImage) }} style={styles.postAvatar} />
           ) : (
@@ -572,7 +1224,28 @@ export const FeedScreen = () => {
             </View>
           )}
           <View style={styles.postAuthorDetails}>
-            <Text style={styles.postAuthorName}>{authorName}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Text style={styles.postAuthorName}>{authorName}</Text>
+              {post.feed_group && (
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#CCFAF6',
+                    paddingHorizontal: 6,
+                    paddingVertical: 2,
+                    borderRadius: 10,
+                    marginLeft: 6,
+                  }}
+                  onPress={() => navigation.navigate('GroupDetail', { groupId: post.feed_group.id })}
+                >
+                  <Ionicons name="people" size={10} color={AppColors.primary} style={{ marginRight: 3 }} />
+                  <Text style={{ fontSize: 10, color: AppColors.primary, fontWeight: '600' }} numberOfLines={1}>
+                    {post.feed_group.name}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <Text style={styles.postTime}>
               {new Date(post.created_at).toLocaleDateString()} {post.is_edited && '• Edited'}
             </Text>
@@ -583,74 +1256,65 @@ export const FeedScreen = () => {
         </View>
 
         {/* Content text */}
-        <Text style={styles.postContent}>{post.content}</Text>
+        <Text style={[styles.postContent, { paddingHorizontal: 16 }]} numberOfLines={hasMedia ? 3 : undefined}>
+          {post.content}
+        </Text>
 
         {/* Multi-images / Single image slidable swiper */}
-        {post.media && post.media.length > 0 && (
-          post.media.length === 1 ? (
-            <Image source={{ uri: resolveMediaUrl(post.media[0].url) }} style={styles.postImage} />
-          ) : (
-            <View style={styles.carouselContainer}>
-              <FlatList
-                horizontal
-                pagingEnabled
-                showsHorizontalScrollIndicator={false}
-                data={post.media}
-                keyExtractor={m => m.id.toString()}
-                renderItem={({ item }) => (
-                  <Image source={{ uri: resolveMediaUrl(item.url) }} style={styles.postCarouselImage} />
-                )}
-              />
-              <View style={styles.carouselIndicator}>
-                <Ionicons name="images" size={12} color="white" />
-                <Text style={styles.carouselIndicatorText}>Swipe to view ({post.media.length})</Text>
+        {hasMedia && post.media && post.media.length > 0 && (
+          <View style={{ height: SCREEN_HEIGHT * 0.55, width: '100%', marginBottom: 12 }}>
+            {post.media.length === 1 ? (
+              post.media[0].type === 'video' || isVideoUrl(post.media[0].url) ? (
+                <PostVideoPlayer
+                  videoUrl={resolveMediaUrl(post.media[0].url)}
+                  style={{ width: '100%', height: '100%' }}
+                  shouldPlay={activePostId === post.id.toString()}
+                  isMuted={isFeedMuted}
+                  onToggleMute={() => setIsFeedMuted(!isFeedMuted)}
+                />
+              ) : (
+                <Image source={{ uri: resolveMediaUrl(post.media[0].url) }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              )
+            ) : (
+              <View style={{ flex: 1, width: '100%', position: 'relative' }}>
+                <FlatList
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  data={post.media}
+                  keyExtractor={m => m.id.toString()}
+                  renderItem={({ item }) => (
+                    item.type === 'video' || isVideoUrl(item.url) ? (
+                      <PostVideoPlayer
+                        videoUrl={resolveMediaUrl(item.url)}
+                        style={{ width: SCREEN_WIDTH, height: '100%' }}
+                        shouldPlay={activePostId === post.id.toString()}
+                        isMuted={isFeedMuted}
+                        onToggleMute={() => setIsFeedMuted(!isFeedMuted)}
+                      />
+                    ) : (
+                      <Image source={{ uri: resolveMediaUrl(item.url) }} style={{ width: SCREEN_WIDTH, height: '100%' }} resizeMode="cover" />
+                    )
+                  )}
+                />
+                <View style={styles.carouselIndicator}>
+                  <Ionicons name="images" size={12} color="white" />
+                  <Text style={styles.carouselIndicatorText}>Swipe to view ({post.media.length})</Text>
+                </View>
               </View>
-            </View>
-          )
+            )}
+          </View>
         )}
 
         {/* Dynamic Poll Card rendering */}
-        {post.post_type === 'poll' && post.poll_options && (
-          <View style={styles.pollCard}>
-            <Text style={styles.pollTitle}>📊 Ekenox Poll</Text>
-
-            {post.poll_options.map((option, idx) => {
-              // Calculate votes statistics
-              const results = post.poll_results || {};
-              const votesCount = results[idx.toString()] ?? results[idx] ?? 0;
-
-              // Sum all options
-              const totalVotes = Object.values(results).reduce((a: any, b: any) => Number(a) + Number(b), 0) as number;
-              const percentage = totalVotes > 0 ? Math.round((votesCount / totalVotes) * 100) : 0;
-              const hasVoted = post.user_votes && post.user_votes.includes(idx);
-
-              return (
-                <TouchableOpacity
-                  key={idx}
-                  style={[
-                    styles.pollOptionBtn,
-                    hasVoted ? styles.pollOptionVoted : null,
-                  ]}
-                  onPress={() => handleVotePoll(post.id, idx)}
-                  disabled={!!(post.user_votes && post.user_votes.length > 0)}
-                >
-                  <View style={[styles.pollProgressFill, { width: `${percentage}%` }]} />
-                  <View style={styles.pollOptionContent}>
-                    <Text style={[styles.pollOptionText, hasVoted ? styles.pollOptionTextVoted : null]}>
-                      {option}
-                    </Text>
-                    {post.user_votes && post.user_votes.length > 0 && (
-                      <Text style={styles.pollPercentText}>{percentage}% ({votesCount})</Text>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+        {post.post_type === 'poll' && (
+          <View style={{ paddingHorizontal: 16 }}>
+            <FeedPollWidget feed={post} onVoteSuccess={() => loadData(false)} />
           </View>
         )}
 
         {/* Buttons footer reactions */}
-        <View style={styles.postFooter}>
+        <View style={[styles.postFooter, { paddingHorizontal: 16 }]}>
           <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleLikePost(post.id)}>
             <Ionicons
               name={isLiked ? 'heart' : 'heart-outline'}
@@ -664,13 +1328,17 @@ export const FeedScreen = () => {
 
           <TouchableOpacity
             style={styles.postFooterBtn}
-            onPress={() => Alert.alert('Comments', 'Comments are available inside group or event details screens.')}
+            onPress={() => {
+              setCommentsPostId(post.id);
+              setCommentsPostCount(comments);
+              setCommentsModalVisible(true);
+            }}
           >
             <Ionicons name="chatbubble-outline" size={19} color={AppColors.textMedium} />
             <Text style={styles.postFooterText}>{comments}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleCopyLink(post.id)}>
+          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleSharePost(post.id)}>
             <Ionicons name="share-social-outline" size={19} color={AppColors.textMedium} />
           </TouchableOpacity>
         </View>
@@ -683,8 +1351,22 @@ export const FeedScreen = () => {
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       {/* Top Header Navbar */}
-      <View style={[styles.header, { paddingTop: insets.top, height: 60 + insets.top }]}>
-        <TouchableOpacity style={styles.headerAvatarContainer} onPress={() => setShowProfilePanel(true)}>
+      <Animated.View
+        style={[
+          styles.header,
+          {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            paddingTop: insets.top,
+            height: 60 + insets.top,
+            transform: [{ translateY: headerTranslateY }],
+          },
+        ]}
+      >
+        <TouchableOpacity style={styles.headerAvatarContainer} onPress={() => navigation.navigate('Profile')}>
           {user?.profileImage ? (
             <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.headerAvatar} />
           ) : (
@@ -696,33 +1378,81 @@ export const FeedScreen = () => {
           )}
         </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>eKeNox</Text>
+        <View style={styles.headerSegmentedControl}>
+          <TouchableOpacity
+            style={[styles.headerSegmentBtn, currentTab === 0 && styles.headerSegmentBtnActive]}
+            onPress={() => setCurrentTab(0)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.headerSegmentText, currentTab === 0 && styles.headerSegmentTextActive]}>Feed</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.headerSegmentBtn, currentTab === 1 && styles.headerSegmentBtnActive]}
+            onPress={() => setCurrentTab(1)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.headerSegmentText, currentTab === 1 && styles.headerSegmentTextActive]}>Groups</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.headerActions}>
           <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Messages')}>
             <Ionicons name="chatbubbles-outline" size={22} color={AppColors.textDark} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => Alert.alert('Notifications', 'Notification logs synced in profile metrics.')}>
-            <Ionicons name="notifications-outline" size={22} color={AppColors.textDark} />
+          <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Notifications')}>
+            <View style={{ position: 'relative' }}>
+              <Ionicons name="notifications-outline" size={22} color={AppColors.textDark} />
+              {unreadNotifCount > 0 && (
+                <View style={styles.notifBadge}>
+                  <Text style={styles.notifBadgeText}>
+                    {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         </View>
-      </View>
+      </Animated.View>
 
-      {/* Navigation Main Tab Bar */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tabBtn, currentTab === 0 ? styles.tabBtnActive : null]}
-          onPress={() => setCurrentTab(0)}
+      {/* Sticky Create Feed Bar Overlay */}
+      {currentTab === 0 && !isLoading && (
+        <Animated.View
+          style={[
+            styles.createBarContainer,
+            {
+              position: 'absolute',
+              top: 60 + insets.top,
+              left: 0,
+              right: 0,
+              zIndex: 99,
+              opacity: absoluteBarOpacity,
+              transform: [{ translateY: createBarTranslateY }],
+            },
+          ]}
         >
-          <Text style={[styles.tabText, currentTab === 0 ? styles.tabTextActive : null]}>Feed</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tabBtn, currentTab === 1 ? styles.tabBtnActive : null]}
-          onPress={() => setCurrentTab(1)}
-        >
-          <Text style={[styles.tabText, currentTab === 1 ? styles.tabTextActive : null]}>Groups</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={styles.createBarContent}
+            onPress={() => navigation.navigate('CreatePost')}
+            activeOpacity={0.85}
+          >
+            {user?.profileImage ? (
+              <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
+            ) : (
+              <View style={styles.createBarAvatarPlaceholder}>
+                <Text style={styles.createBarAvatarText}>
+                  {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.createBarInputPlaceholder}>Share an eco action with the community…</Text>
+            <View style={styles.createBarBtn}>
+              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+              <Text style={styles.createBarBtnText}>Create Feed</Text>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
 
       {isLoading ? (
         <View style={styles.loadingContainer}>
@@ -734,24 +1464,34 @@ export const FeedScreen = () => {
         currentTab === 0 ? (
           <ScrollView
             style={styles.content}
+            contentContainerStyle={{ paddingTop: 60 + insets.top }}
             showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={handleScroll}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
             }
           >
             {/* Horizontal Stories list sequence */}
-            {stories.length > 0 && (
-              <View style={styles.storiesContainer}>
-                <FlatList
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  data={stories}
-                  renderItem={renderStoryItem}
-                  keyExtractor={item => item.id.toString()}
-                  contentContainerStyle={{ paddingHorizontal: 16 }}
-                />
-              </View>
-            )}
+            {/* Horizontal Stories list sequence */}
+            <View style={styles.storiesContainer}>
+              <FlatList
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                data={stories}
+                renderItem={renderStoryItem}
+                ListHeaderComponent={renderCreateStoryHeader}
+                keyExtractor={item => item.id.toString()}
+                contentContainerStyle={{ paddingHorizontal: 16 }}
+                onEndReached={() => {
+                  if (hasMoreStories && !loadingMoreStories) {
+                    loadStories(storyPage + 1);
+                  }
+                }}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={renderStorySkeleton}
+              />
+            </View>
 
             {/* Expandable Daily Tip Card */}
             {showTip && dailyTip && (
@@ -797,6 +1537,30 @@ export const FeedScreen = () => {
               </View>
             )}
 
+            {/* Top Create Feed Bar */}
+            <View style={styles.createBarContainer}>
+              <TouchableOpacity
+                style={styles.createBarContent}
+                onPress={() => navigation.navigate('CreatePost')}
+                activeOpacity={0.85}
+              >
+                {user?.profileImage ? (
+                  <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
+                ) : (
+                  <View style={styles.createBarAvatarPlaceholder}>
+                    <Text style={styles.createBarAvatarText}>
+                      {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.createBarInputPlaceholder}>Share an eco action with the community…</Text>
+                <View style={styles.createBarBtn}>
+                  <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+                  <Text style={styles.createBarBtnText}>Create Feed</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
             {/* Featured Events Carousel - Limited to 5 items */}
             {events.length > 0 && (
               <View style={styles.eventsSection}>
@@ -826,8 +1590,16 @@ export const FeedScreen = () => {
                             <Text style={styles.eventInfoText}>{formatEventDates(event.startTime, event.endTime)}</Text>
                           </View>
                           <View style={styles.eventInfoRow}>
-                            <Ionicons name="location-outline" size={13} color={AppColors.textMedium} />
-                            <Text style={styles.eventInfoText} numberOfLines={1}>{event.location}</Text>
+                            <Ionicons
+                              name={event.privacy_level === 'private' || event.privacyLevel === 'private' ? "lock-closed-outline" : "location-outline"}
+                              size={13}
+                              color={AppColors.textMedium}
+                            />
+                            <Text style={styles.eventInfoText} numberOfLines={1}>
+                              {event.privacy_level === 'private' || event.privacyLevel === 'private'
+                                ? '🔒 Private Location'
+                                : event.location}
+                            </Text>
                           </View>
                         </View>
                       </TouchableOpacity>
@@ -842,8 +1614,32 @@ export const FeedScreen = () => {
               <Text style={styles.sectionTitle}>Recent Eco Actions</Text>
             </View> */}
 
+            {/* Support/Coffee Donation Banner */}
+            <TouchableOpacity
+              style={styles.coffeeBanner}
+              onPress={() => Linking.openURL('https://buymeacoffee.com/dosuu')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.coffeeIconBg}>
+                <Ionicons name="cafe" size={18} color="#000000" />
+              </View>
+              <View style={styles.coffeeTextContainer}>
+                <Text style={styles.coffeeTitle}>Support Ekenox development</Text>
+                <Text style={styles.coffeeSubtitle}>I survive by donations, buy me a coffee! ☕</Text>
+              </View>
+              <View style={styles.coffeeBadge}>
+                <Text style={styles.coffeeBadgeText}>Donate</Text>
+                <Ionicons name="heart" size={10} color="#EF4444" style={{ marginLeft: 2 }} />
+              </View>
+            </TouchableOpacity>
+
             {/* Posts Cards list */}
-            <View style={styles.postsList}>
+            <View
+              style={styles.postsList}
+              onLayout={event => {
+                postsListY.current = event.nativeEvent.layout.y;
+              }}
+            >
               {posts.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="leaf-outline" size={48} color={AppColors.textLight} />
@@ -851,6 +1647,12 @@ export const FeedScreen = () => {
                 </View>
               ) : (
                 posts.map(post => renderPostCard(post))
+              )}
+              {loadingMoreFeeds && (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={AppColors.primary} />
+                  <Text style={{ fontSize: 12, color: AppColors.textMedium, marginTop: 6 }}>Loading more eco actions...</Text>
+                </View>
               )}
             </View>
 
@@ -860,15 +1662,38 @@ export const FeedScreen = () => {
           /* Groups tab explorer with Public, My Groups, Discover pills */
           <ScrollView
             style={styles.content}
+            contentContainerStyle={{ paddingTop: 60 + insets.top }}
             showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={(event) => {
+              scrollY.setValue(event.nativeEvent.contentOffset.y);
+            }}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
             }
           >
             {/* Groups exploration header */}
             <View style={styles.groupsHeaderRow}>
               <Text style={styles.sectionTitle}>Explore Groups</Text>
               <Text style={styles.groupsSubtitle}>Connect with Ekenox eco champions around the world.</Text>
+
+              {/* Top Create Group Bar */}
+              <View style={[styles.createBarContainer, { paddingHorizontal: 0, marginTop: 12 }]}>
+                <TouchableOpacity
+                  style={styles.createBarContent}
+                  onPress={() => navigation.navigate('CreateGroup')}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.createBarAvatarPlaceholder, { backgroundColor: '#CCFAF6' }]}>
+                    <Ionicons name="people" size={18} color={AppColors.primary} />
+                  </View>
+                  <Text style={styles.createBarInputPlaceholder}>Build a new eco community group…</Text>
+                  <View style={styles.createBarBtn}>
+                    <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+                    <Text style={styles.createBarBtnText}>Create Group</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Pill-filters Tab switcher */}
@@ -877,18 +1702,36 @@ export const FeedScreen = () => {
                 style={[styles.pillBtn, groupActiveTab === 'public' ? styles.pillBtnActive : null]}
                 onPress={() => setGroupActiveTab('public')}
               >
+                <Ionicons
+                  name="earth-outline"
+                  size={14}
+                  color={groupActiveTab === 'public' ? AppColors.primary : AppColors.textMedium}
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={[styles.pillText, groupActiveTab === 'public' ? styles.pillTextActive : null]}>Public</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.pillBtn, groupActiveTab === 'user' ? styles.pillBtnActive : null]}
                 onPress={() => setGroupActiveTab('user')}
               >
+                <Ionicons
+                  name="people-outline"
+                  size={14}
+                  color={groupActiveTab === 'user' ? AppColors.primary : AppColors.textMedium}
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={[styles.pillText, groupActiveTab === 'user' ? styles.pillTextActive : null]}>My Groups</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.pillBtn, groupActiveTab === 'discover' ? styles.pillBtnActive : null]}
                 onPress={() => setGroupActiveTab('discover')}
               >
+                <Ionicons
+                  name="compass-outline"
+                  size={14}
+                  color={groupActiveTab === 'discover' ? AppColors.primary : AppColors.textMedium}
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={[styles.pillText, groupActiveTab === 'discover' ? styles.pillTextActive : null]}>Discover</Text>
               </TouchableOpacity>
             </View>
@@ -906,56 +1749,156 @@ export const FeedScreen = () => {
                   const isPending = !!(group.user_membership && group.user_membership.status === 'pending');
                   const isActionLoading = actionLoadingId === group.id;
 
+                  // Get max 3 random mutual friends
+                  const getMutualFriendsSelection = (friendsList: any[]) => {
+                    if (!friendsList || friendsList.length === 0) return [];
+                    const shuffled = [...friendsList].sort(() => 0.5 - Math.random());
+                    return shuffled.slice(0, 3);
+                  };
+                  const mutualSelection = getMutualFriendsSelection(group.mutual_friends || []);
+
                   return (
                     <TouchableOpacity
                       key={group.id}
-                      style={styles.groupCard}
-                      activeOpacity={0.8}
+                      style={styles.groupCardModernized}
+                      activeOpacity={0.92}
                       onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
                     >
-                      <View style={styles.groupHeader}>
-                        <View style={styles.groupIconContainer}>
-                          {group.cover_image_url ? (
-                            <Image
-                              source={{ uri: resolveMediaUrl(group.cover_image_url) }}
-                              style={styles.groupCoverImage}
-                              resizeMode="cover"
-                            />
-                          ) : (
-                            <Ionicons name="people" size={24} color={AppColors.primary} />
-                          )}
-                        </View>
-                        <View style={styles.groupDetails}>
-                          <Text style={styles.groupName}>{group.name}</Text>
-                          <Text style={styles.groupMeta}>
-                            {group.privacy_level.toUpperCase()} • {group.members_count} members
-                          </Text>
-                        </View>
+                      {/* Floating Privacy Badge inside card at top-right */}
+                      <View style={styles.groupPrivacyBadgeModernized}>
+                        <Ionicons
+                          name={group.privacy_level === 'private' ? 'lock-closed' : 'globe-outline'}
+                          size={10}
+                          color={group.privacy_level === 'private' ? '#EF4444' : AppColors.textMedium}
+                        />
+                        <Text style={[styles.groupPrivacyTextModernized, group.privacy_level === 'private' && { color: '#EF4444' }]}>
+                          {group.privacy_level.toUpperCase()}
+                        </Text>
                       </View>
 
-                      <Text style={styles.groupDesc} numberOfLines={2}>{group.description}</Text>
+                      <View style={styles.groupCardContentModernized}>
+                        <View style={styles.groupCardMainRowModernized}>
+                          {group.profile_image_url ? (
+                            <Image source={{ uri: resolveMediaUrl(group.profile_image_url) }} style={styles.groupCardLogoModernized} />
+                          ) : (
+                            <View style={styles.groupCardLogoPlaceholderModernized}>
+                              <Ionicons name="people" size={18} color={AppColors.primary} />
+                            </View>
+                          )}
 
-                      <TouchableOpacity
-                        style={[
-                          styles.groupActionBtn,
-                          isJoined ? styles.groupActionBtnJoined : null,
-                        ]}
-                        onPress={() => handleToggleGroupJoin(group)}
-                        disabled={isActionLoading || isPending}
-                      >
-                        {isActionLoading ? (
-                          <ActivityIndicator color={isJoined ? AppColors.textDark : 'white'} size="small" />
-                        ) : (
-                          <Text
-                            style={[
-                              styles.groupActionText,
-                              isJoined ? styles.groupActionTextJoined : null,
-                            ]}
-                          >
-                            {isJoined ? 'Joined' : isPending ? 'Pending' : 'Join Group'}
-                          </Text>
+                          <View style={styles.groupCardTitleBlockModernized}>
+                            <Text style={styles.groupCardNameModernized} numberOfLines={1}>{group.name}</Text>
+                            <Text style={styles.groupCardCategoryTextModernized}>Eco Group</Text>
+                            {(group as any).tagline ? (
+                              <Text style={styles.groupCardTaglineModernized} numberOfLines={1}>{(group as any).tagline}</Text>
+                            ) : null}
+                          </View>
+                        </View>
+
+                        {/* Member count & role/status row */}
+                        <View style={styles.groupCardMetaInfoRowModernized}>
+                          <View style={styles.groupCardMembersIndicatorModernized}>
+                            <Ionicons name="people-outline" size={14} color={AppColors.textMedium} />
+                            <Text style={styles.groupCardMembersIndicatorTextModernized}>
+                              {group.members_count || 0} member{group.members_count > 1 ? 's' : ''}
+                            </Text>
+                          </View>
+
+                          {group.user_membership && (
+                            <View style={styles.groupCardRoleLabelPillModernized}>
+                              <Text style={styles.groupCardRoleLabelPillTextModernized}>
+                                {group.user_membership.role === 'admin' ? 'Admin' : group.user_membership.status === 'pending' ? 'Pending' : 'Member'}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Mutual Friends Avatar Tags Stack */}
+                        {group.mutual_friends && group.mutual_friends.length > 0 && (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              {group.mutual_friends.map((friend: any, index: number) => {
+                                const friendAvatar = resolveMediaUrl(friend.profile_image || friend.avatar_url);
+                                return (
+                                  <View
+                                    key={friend.id || index}
+                                    style={{
+                                      width: 22,
+                                      height: 22,
+                                      borderRadius: 11,
+                                      borderWidth: 1.5,
+                                      borderColor: 'white',
+                                      marginLeft: index > 0 ? -8 : 0,
+                                      backgroundColor: AppColors.primary,
+                                      overflow: 'hidden',
+                                      justifyContent: 'center',
+                                      alignItems: 'center',
+                                    }}
+                                  >
+                                    {friendAvatar ? (
+                                      <Image source={{ uri: friendAvatar }} style={{ width: '100%', height: '100%' }} />
+                                    ) : (
+                                      <Ionicons name="person" size={10} color="white" />
+                                    )}
+                                  </View>
+                                );
+                              })}
+                            </View>
+                            <Text style={{ fontSize: 11, color: AppColors.textMedium, marginLeft: 6, fontWeight: '500' }}>
+                              Joined by {group.mutual_friends[0]?.full_name || 'mutual friend'}
+                              {group.mutual_friends_count > 1 ? ` +${group.mutual_friends_count - 1} more` : ''}
+                            </Text>
+                          </View>
                         )}
-                      </TouchableOpacity>
+
+                        <Text style={styles.groupCardDescModernized} numberOfLines={2}>
+                          {group.description || 'Join this eco community to coordinate actions, share resources, and offset carbon.'}
+                        </Text>
+
+                        <View style={styles.groupCardDividerModernized} />
+
+                        {/* Action buttons */}
+                        <View style={styles.groupCardActionButtonsRowModernized}>
+                          <TouchableOpacity
+                            style={styles.groupCardDetailsActionBtnModernized}
+                            onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
+                          >
+                            <Text style={styles.groupCardDetailsActionBtnTextModernized}>Details</Text>
+                            <Ionicons name="chevron-forward" size={13} color={AppColors.primary} />
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.groupCardJoinActionBtnModernized,
+                              isJoined && styles.groupCardJoinActionBtnMemberModernized,
+                              isPending && styles.groupCardJoinActionBtnPendingModernized
+                            ]}
+                            onPress={() => handleToggleGroupJoin(group)}
+                            disabled={isActionLoading || isPending}
+                          >
+                            {isActionLoading ? (
+                              <ActivityIndicator size="small" color={isJoined ? AppColors.primary : 'white'} />
+                            ) : (
+                              <>
+                                <Ionicons
+                                  name={isJoined ? 'checkmark-circle' : isPending ? 'hourglass-outline' : 'add-circle-outline'}
+                                  size={14}
+                                  color={isJoined ? AppColors.primary : isPending ? '#D97706' : 'white'}
+                                />
+                                <Text
+                                  style={[
+                                    styles.groupCardJoinActionBtnTextModernized,
+                                    isJoined && styles.groupCardJoinActionBtnTextMemberModernized,
+                                    isPending && styles.groupCardJoinActionBtnTextPendingModernized
+                                  ]}
+                                >
+                                  {isJoined ? 'Joined' : isPending ? 'Pending' : 'Join'}
+                                </Text>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
                     </TouchableOpacity>
                   );
                 })
@@ -967,12 +1910,7 @@ export const FeedScreen = () => {
         )
       )}
 
-      {/* Floating Action Button for post creation */}
-      <TouchableOpacity style={styles.fab} onPress={handleCreateCTA}>
-        <Ionicons name="add" size={30} color="white" />
-      </TouchableOpacity>
-
-      {/* Stories Slideshow Fullscreen Modal Viewer */}
+      {/* Stories Slideshow Modal Viewer */}
       {storyModalVisible && selectedStoryIndex !== null && stories[selectedStoryIndex] && (
         <Modal
           visible={storyModalVisible}
@@ -980,110 +1918,460 @@ export const FeedScreen = () => {
           transparent={true}
           onRequestClose={closeStories}
         >
-          <SafeAreaView style={styles.storyViewerContainer}>
-            <StatusBar barStyle="light-content" backgroundColor="#000000" />
+          <View style={styles.storyModalOverlay}>
+            <TouchableOpacity style={styles.storyModalBackdrop} activeOpacity={1} onPress={closeStories} />
 
-            {/* Story Image / Video Background */}
-            <View style={styles.storyViewerImageWrapper}>
-              {(() => {
-                const activeStory = stories[selectedStoryIndex];
-                const slides = activeStory?.slides || [];
-                const slide = slides[currentSlideIndex];
-                const mediaUrl = resolveMediaUrl(
-                  slide?.media_url ||
-                  slide?.mediaUrl ||
-                  slide?.url ||
-                  activeStory?.video_url ||
-                  activeStory?.videoUrl ||
-                  activeStory?.thumbnail_url ||
-                  activeStory?.thumbnailUrl
-                );
-                const isVideo = slide
-                  ? slide.media_type === 'video' || isVideoUrl(slide.media_url || slide.mediaUrl)
-                  : isVideoUrl(activeStory?.video_url || activeStory?.videoUrl);
+            <View style={styles.storyViewerContainer}>
+              <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.9)" />
 
-                if (isVideo) {
-                  return (
-                    <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
-                      <VideoView
-                        player={player}
-                        style={styles.storyViewerImage}
-                        contentFit="contain"
-                        nativeControls={false}
-                      />
-                      {storyVideoLoading && (
-                        <ActivityIndicator style={{ position: 'absolute' }} color="white" size="large" />
+              {/* Inner card content wrapper */}
+              <View style={styles.storyInnerWrapper}>
+
+                {/* Story Image / Video Background */}
+                <View style={styles.storyViewerImageWrapper}>
+                  {(() => {
+                    const activeStory = stories[selectedStoryIndex];
+                    const slides = activeStory?.slides || [];
+                    const slide = slides[currentSlideIndex];
+                    const mediaUrl = resolveMediaUrl(
+                      slide?.media_url ||
+                      slide?.mediaUrl ||
+                      slide?.url ||
+                      activeStory?.video_url ||
+                      activeStory?.videoUrl ||
+                      activeStory?.thumbnail_url ||
+                      activeStory?.thumbnailUrl
+                    );
+                    const isVideo = slide
+                      ? slide.media_type === 'video' || isVideoUrl(slide.media_url || slide.mediaUrl)
+                      : isVideoUrl(activeStory?.video_url || activeStory?.videoUrl);
+
+                    if (isVideo) {
+                      return (
+                        <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+                          <VideoView
+                            player={player}
+                            style={styles.storyViewerImage}
+                            contentFit="cover"
+                            nativeControls={false}
+                          />
+                          {storyVideoLoading && (
+                            <ActivityIndicator style={{ position: 'absolute' }} color="white" size="large" />
+                          )}
+                        </View>
+                      );
+                    } else {
+                      return (
+                        <Image
+                          source={{ uri: mediaUrl }}
+                          style={styles.storyViewerImage}
+                          resizeMode="cover"
+                        />
+                      );
+                    }
+                  })()}
+
+                  {/* Touch split navigation controls */}
+                  <View style={styles.storyViewerGestureOverlay}>
+                    <TouchableOpacity style={{ flex: 1 }} onPress={handlePrevSlide} />
+                    <TouchableOpacity style={{ flex: 1 }} onPress={handleNextSlide} />
+                  </View>
+                </View>
+
+                {/* Slides Progress Indicators at the Top */}
+                <View style={[styles.storyProgressContainer, { top: insets.top + 12 }]}>
+                  {(stories[selectedStoryIndex]?.slides || [1]).map((_: any, idx: number) => (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.storyProgressBar,
+                        {
+                          backgroundColor: idx === currentSlideIndex
+                            ? 'white'
+                            : idx < currentSlideIndex
+                              ? AppColors.primary
+                              : 'rgba(255, 255, 255, 0.3)'
+                        }
+                      ]}
+                    />
+                  ))}
+                </View>
+
+                {/* Story Viewer Header: User details, mute & Close */}
+                <View style={[styles.storyViewerHeader, { top: insets.top + 22 }]}>
+                  <Image
+                    source={{
+                      uri: resolveMediaUrl(
+                        stories[selectedStoryIndex]?.userAvatar ||
+                        stories[selectedStoryIndex]?.user?.profile_image ||
+                        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
+                      )
+                    }}
+                    style={styles.storyViewerAvatar}
+                  />
+                  <Text style={styles.storyViewerName} numberOfLines={1}>
+                    {stories[selectedStoryIndex]?.username || stories[selectedStoryIndex]?.user?.full_name || 'Champion'}
+                  </Text>
+                  {/* Mute / Unmute */}
+                  <TouchableOpacity
+                    style={styles.storyMuteBtn}
+                    onPress={() => {
+                      const muted = !isMusicMuted;
+                      setIsMusicMuted(muted);
+                      if (muted) bgMusicPlayer.pause(); else bgMusicPlayer.play();
+                    }}
+                  >
+                    <Ionicons name={isMusicMuted ? 'volume-mute' : 'volume-high'} size={20} color="white" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.storyViewerCloseBtn} onPress={closeStories}>
+                    <Ionicons name="close-circle" size={28} color="white" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Slide title / description caption at the bottom */}
+                <View style={[styles.storyViewerFooter, { bottom: insets.bottom + 8 }]}>
+                  {stories[selectedStoryIndex]?.title && (
+                    <Text style={styles.storyViewerTitle}>
+                      {stories[selectedStoryIndex]?.title}
+                    </Text>
+                  )}
+                  {stories[selectedStoryIndex]?.description && (
+                    <Text style={styles.storyViewerDesc}>
+                      {stories[selectedStoryIndex]?.description}
+                    </Text>
+                  )}
+
+                  {/* Metadata labels row */}
+                  <View style={styles.storyMetaOverlayRow}>
+                    {stories[selectedStoryIndex]?.location && (
+                      <View style={styles.storyMetaBadge}>
+                        <Ionicons name="location" size={10} color="white" />
+                        <Text style={styles.storyMetaBadgeText}>
+                          {stories[selectedStoryIndex]?.location}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Music chip — show real title or preset name */}
+                    {(stories[selectedStoryIndex]?.music_title || stories[selectedStoryIndex]?.selected_music) && (
+                      <View style={styles.storyMetaBadge}>
+                        <Ionicons name="musical-notes" size={10} color="white" />
+                        <Text style={styles.storyMetaBadgeText} numberOfLines={1}>
+                          {stories[selectedStoryIndex]?.music_title ||stories[selectedStoryIndex]?.selected_music}
+                          {stories[selectedStoryIndex]?.music_singer ? ` · ${stories[selectedStoryIndex].music_singer}` : ''}
+                        </Text>
+                      </View>
+                    )}
+
+                    {stories[selectedStoryIndex]?.tagged_users && (
+                      <View style={styles.storyMetaBadge}>
+                        <Ionicons name="people" size={10} color="white" />
+                        <Text style={styles.storyMetaBadgeText}>
+                          {Array.isArray(stories[selectedStoryIndex].tagged_users) 
+                            ? stories[selectedStoryIndex].tagged_users.map((u: string) => `@${u}`).join(' ')
+                            : stories[selectedStoryIndex].tagged_users}
+                        </Text>
+                      </View>
+                    )}
+
+                    {stories[selectedStoryIndex]?.hashtags && (
+                      <View style={styles.storyMetaBadge}>
+                        <Ionicons name="pricetag" size={10} color="white" />
+                        <Text style={styles.storyMetaBadgeText}>
+                          {Array.isArray(stories[selectedStoryIndex].hashtags)
+                            ? stories[selectedStoryIndex].hashtags.map((h: string) => `#${h}`).join(' ')
+                            : stories[selectedStoryIndex].hashtags}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Swipe Up link button */}
+                  {stories[selectedStoryIndex]?.link_url && (
+                    <TouchableOpacity 
+                      style={styles.storySwipeUpBtn}
+                      onPress={() => {
+                        const url = stories[selectedStoryIndex].link_url;
+                        Linking.openURL(url).catch(err => console.error("Couldn't open URL", err));
+                      }}
+                    >
+                      <Ionicons name="chevron-up" size={16} color="white" />
+                      <Text style={styles.storySwipeUpText}>View Link</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Likes / Shares Bubble Row */}
+                  {(storyLikesList.length > 0 || storySharesList.length > 0) && (
+                    <View style={styles.storyBubbleRow}>
+                      {storyLikesList.length > 0 && (
+                        <TouchableOpacity style={styles.storyBubbleTag} onPress={handleLoadLikesList}>
+                          <View style={styles.storyAvatarOverlap}>
+                            {storyLikesList.slice(0, 3).map((item, idx) => (
+                              <Image
+                                key={item.id || idx}
+                                source={{ uri: resolveMediaUrl(item.user?.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100') }}
+                                style={[styles.storyOverlapAvatar, { marginLeft: idx > 0 ? -10 : 0 }]}
+                              />
+                            ))}
+                          </View>
+                          <Text style={styles.storyBubbleText}>
+                            Liked by {storyLikesList[0]?.user?.full_name || 'someone'}
+                            {storyLikesList.length > 1 ? ` and ${storyLikesList.length - 1} others` : ''}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {storySharesList.length > 0 && (
+                        <TouchableOpacity style={styles.storyBubbleTag} onPress={handleLoadSharesList}>
+                          <View style={styles.storyAvatarOverlap}>
+                            {storySharesList.slice(0, 3).map((item, idx) => (
+                              <Image
+                                key={item.id || idx}
+                                source={{ uri: resolveMediaUrl(item.user?.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100') }}
+                                style={[styles.storyOverlapAvatar, { marginLeft: idx > 0 ? -10 : 0 }]}
+                              />
+                            ))}
+                          </View>
+                          <Text style={styles.storyBubbleText}>
+                            Shared by {storySharesList[0]?.user?.full_name || 'someone'}
+                            {storySharesList.length > 1 ? ` and ${storySharesList.length - 1} others` : ''}
+                          </Text>
+                        </TouchableOpacity>
                       )}
                     </View>
-                  );
-                } else {
-                  return (
-                    <Image
-                      source={{ uri: mediaUrl }}
-                      style={styles.storyViewerImage}
-                      resizeMode="contain"
-                    />
-                  );
-                }
-              })()}
+                  )}
 
-              {/* Touch split navigation controls */}
-              <View style={styles.storyViewerGestureOverlay}>
-                <TouchableOpacity style={{ flex: 1 }} onPress={handlePrevSlide} />
-                <TouchableOpacity style={{ flex: 1 }} onPress={handleNextSlide} />
+                  {/* ── Action Bar ── */}
+                  <View style={styles.storyActionBar}>
+                    {/* Like */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <TouchableOpacity onPress={handleStoryLike}>
+                        <Ionicons name={storyLiked ? 'thumbs-up' : 'thumbs-up-outline'} size={26} color={storyLiked ? '#3B82F6' : 'white'} />
+                      </TouchableOpacity>
+                      {storyLikeCount > 0 && (
+                        <TouchableOpacity onPress={handleLoadLikesList}>
+                          <Text style={styles.storyActionCount}>{storyLikeCount}</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {/* Emoji Reaction */}
+                    <TouchableOpacity style={styles.storyActionBtn} onPress={() => setShowReactionPicker(p => !p)}>
+                      <Text style={{ fontSize: 22 }}>{userReaction || '😊'}</Text>
+                    </TouchableOpacity>
+
+                    {/* Comment */}
+                    <TouchableOpacity style={styles.storyActionBtn} onPress={handleLoadStoryComments}>
+                      <Ionicons name="chatbubble-outline" size={24} color="white" />
+                      {(stories[selectedStoryIndex]?.stats?.comments ?? 0) > 0 && (
+                        <Text style={styles.storyActionCount}>{stories[selectedStoryIndex]?.stats?.comments}</Text>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Share */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <TouchableOpacity onPress={handleStoryShare}>
+                        <Ionicons name="share-social-outline" size={24} color="white" />
+                      </TouchableOpacity>
+                      {(stories[selectedStoryIndex]?.stats?.shares ?? 0) > 0 && (
+                        <TouchableOpacity onPress={handleLoadSharesList}>
+                          <Text style={styles.storyActionCount}>{stories[selectedStoryIndex]?.stats?.shares}</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {/* View count */}
+                    <View style={styles.storyActionBtn}>
+                      <Ionicons name="eye-outline" size={22} color="rgba(255,255,255,0.7)" />
+                      <Text style={[styles.storyActionCount, { color: 'rgba(255,255,255,0.7)' }]}>
+                        {stories[selectedStoryIndex]?.stats?.views ?? 0}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Reaction picker row */}
+                  {showReactionPicker && (
+                    <View style={styles.storyReactionPicker}>
+                      {['❤️','😂','😮','😢','😡','👏'].map(em => (
+                        <TouchableOpacity key={em} onPress={() => handleStoryReact(em)} style={styles.storyReactionEmoji}>
+                          <Text style={{ fontSize: 26 }}>{em}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Reaction summary */}
+                  {Object.keys(storyReactions).length > 0 && (
+                    <View style={styles.storyReactionSummary}>
+                      {Object.entries(storyReactions).slice(0, 5).map(([emoji, count]) => (
+                        <Text key={emoji} style={styles.storyReactionSummaryItem}>{emoji} {count as number}</Text>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                {/* Comment Bottom Sheet */}
+                {showStoryComments && (
+                  <View style={[styles.storyCommentSheet, { paddingBottom: insets.bottom + 8 }]}>
+                    <View style={styles.storyCommentSheetHeader}>
+                      <Text style={styles.storyCommentSheetTitle}>Comments</Text>
+                      <TouchableOpacity onPress={() => setShowStoryComments(false)}>
+                        <Ionicons name="chevron-down" size={22} color="#aaa" />
+                      </TouchableOpacity>
+                    </View>
+                    <ScrollView style={{ maxHeight: 260 }} keyboardShouldPersistTaps="handled">
+                      {storyComments.length === 0 ? (
+                        <Text style={styles.storyCommentEmpty}>No comments yet. Be the first!</Text>
+                      ) : storyComments.map((comment: any) => (
+                        <View key={comment.id} style={styles.storyCommentItem}>
+                          <View style={styles.storyCommentRow}>
+                            <Text style={styles.storyCommentUser}>{comment.user?.full_name || 'User'}</Text>
+                            <Text style={styles.storyCommentContent}>{comment.content}</Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => setExpandedReplyCommentId(
+                              expandedReplyCommentId === String(comment.id) ? null : String(comment.id)
+                            )}
+                          >
+                            <Text style={styles.storyCommentReplyToggle}>
+                              {comment.reply_count > 0 ? `${comment.reply_count} replies` : 'Reply'}
+                            </Text>
+                          </TouchableOpacity>
+                          {expandedReplyCommentId === String(comment.id) && (
+                            <View style={styles.storyRepliesBlock}>
+                              {(comment.replies || []).map((reply: any) => (
+                                <View key={reply.id} style={styles.storyReplyItem}>
+                                  <Text style={styles.storyCommentUser}>{reply.user?.full_name || 'User'}</Text>
+                                  <Text style={styles.storyCommentContent}>{reply.content}</Text>
+                                </View>
+                              ))}
+                              <View style={styles.storyReplyInputRow}>
+                                <TextInput
+                                  style={styles.storyReplyInput}
+                                  placeholder="Write a reply..."
+                                  placeholderTextColor="#888"
+                                  value={replyInputs[comment.id] || ''}
+                                  onChangeText={t => setReplyInputs(prev => ({ ...prev, [comment.id]: t }))}
+                                />
+                                <TouchableOpacity onPress={() => handleSendReply(String(comment.id))}>
+                                  <Ionicons name="send" size={18} color={AppColors.primary} />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          )}
+                        </View>
+                      ))}
+                    </ScrollView>
+                    {/* Comment input */}
+                    <View style={styles.storyCommentInputRow}>
+                      <TextInput
+                        style={styles.storyCommentInput}
+                        placeholder="Add a comment..."
+                        placeholderTextColor="#888"
+                        value={storyCommentInput}
+                        onChangeText={setStoryCommentInput}
+                        onSubmitEditing={handleSendStoryComment}
+                        returnKeyType="send"
+                      />
+                      <TouchableOpacity onPress={handleSendStoryComment} disabled={storyCommentSending}>
+                        {storyCommentSending
+                          ? <ActivityIndicator size={18} color={AppColors.primary} />
+                          : <Ionicons name="send" size={20} color={AppColors.primary} />
+                        }
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
               </View>
             </View>
+          </View>
+        </Modal>
+      )}
 
-            {/* Slides Progress Indicators at the Top */}
-            <View style={styles.storyProgressContainer}>
-              {(stories[selectedStoryIndex]?.slides || [1]).map((_: any, idx: number) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.storyProgressBar,
-                    {
-                      backgroundColor: idx === currentSlideIndex
-                        ? 'white'
-                        : idx < currentSlideIndex
-                          ? AppColors.primary
-                          : 'rgba(255, 255, 255, 0.3)'
-                    }
-                  ]}
-                />
-              ))}
-            </View>
-
-            {/* Story Viewer Header: User details & Close Button */}
-            <View style={styles.storyViewerHeader}>
-              <Image
-                source={{
-                  uri: resolveMediaUrl(
-                    stories[selectedStoryIndex]?.userAvatar ||
-                    stories[selectedStoryIndex]?.user?.profile_image ||
-                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
-                  )
-                }}
-                style={styles.storyViewerAvatar}
-              />
-              <Text style={styles.storyViewerName}>
-                {stories[selectedStoryIndex]?.username || stories[selectedStoryIndex]?.user?.full_name || 'Champion'}
-              </Text>
-              <TouchableOpacity style={styles.storyViewerCloseBtn} onPress={closeStories}>
-                <Ionicons name="close" size={26} color="white" />
+      {/* Story Likes Modal */}
+      <Modal
+        visible={showLikesModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => { setShowLikesModal(false); setIsStoryPaused(false); }}
+      >
+        <View style={styles.storyListModalOverlay}>
+          <View style={styles.storyListModalContent}>
+            <View style={styles.storyListModalHeader}>
+              <Text style={styles.storyListModalTitle}>Liked By</Text>
+              <TouchableOpacity onPress={() => { setShowLikesModal(false); setIsStoryPaused(false); }}>
+                <Ionicons name="close" size={24} color={AppColors.textDark} />
               </TouchableOpacity>
             </View>
 
-            {/* Slide title / description caption at the bottom */}
-            <View style={styles.storyViewerFooter}>
-              <Text style={styles.storyViewerTitle}>
-                {stories[selectedStoryIndex]?.slides?.[currentSlideIndex]?.alt_text ||
-                  stories[selectedStoryIndex]?.slides?.[currentSlideIndex]?.altText ||
-                  stories[selectedStoryIndex]?.title || 'Shared an Eco Initiative'}
-              </Text>
+            {storyLikesLoading ? (
+              <ActivityIndicator size="large" color={AppColors.primary} style={{ marginVertical: 30 }} />
+            ) : storyLikesList.length === 0 ? (
+              <Text style={styles.storyListModalEmpty}>No likes yet.</Text>
+            ) : (
+              <FlatList
+                data={storyLikesList}
+                keyExtractor={(item) => (item.id || item.user?.id || Math.random()).toString()}
+                renderItem={({ item }) => (
+                  <View style={styles.storyListUserItem}>
+                    <Image
+                      source={{ uri: resolveMediaUrl(item.user?.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100') }}
+                      style={styles.storyListUserAvatar}
+                    />
+                    <View>
+                      <Text style={styles.storyListUserName}>{item.user?.full_name || 'Champion'}</Text>
+                      {item.user?.first_name && <Text style={styles.storyListUserDisplay}>@{item.user.first_name}</Text>}
+                    </View>
+                  </View>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Story Shares Modal */}
+      <Modal
+        visible={showSharesModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => { setShowSharesModal(false); setIsStoryPaused(false); }}
+      >
+        <View style={styles.storyListModalOverlay}>
+          <View style={styles.storyListModalContent}>
+            <View style={styles.storyListModalHeader}>
+              <Text style={styles.storyListModalTitle}>Shared By</Text>
+              <TouchableOpacity onPress={() => { setShowSharesModal(false); setIsStoryPaused(false); }}>
+                <Ionicons name="close" size={24} color={AppColors.textDark} />
+              </TouchableOpacity>
             </View>
-          </SafeAreaView>
-        </Modal>
-      )}
+
+            {storySharesLoading ? (
+              <ActivityIndicator size="large" color={AppColors.primary} style={{ marginVertical: 30 }} />
+            ) : storySharesList.length === 0 ? (
+              <Text style={styles.storyListModalEmpty}>No shares yet.</Text>
+            ) : (
+              <FlatList
+                data={storySharesList}
+                keyExtractor={(item) => (item.id || item.user?.id || Math.random()).toString()}
+                renderItem={({ item }) => (
+                  <View style={styles.storyListUserItem}>
+                    <Image
+                      source={{ uri: resolveMediaUrl(item.user?.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100') }}
+                      style={styles.storyListUserAvatar}
+                    />
+                    <View>
+                      <Text style={styles.storyListUserName}>{item.user?.full_name || 'Champion'}</Text>
+                      {item.user?.first_name && <Text style={styles.storyListUserDisplay}>@{item.user.first_name}</Text>}
+                    </View>
+                  </View>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
+
 
       {/* Profile Panel drawer overlay */}
       {showProfilePanel && (
@@ -1149,6 +2437,75 @@ export const FeedScreen = () => {
           </View>
         </View>
       )}
+
+      {/* Comments modal sheet */}
+      {commentsPostId !== null && (
+        <CommentsScreen
+          visible={commentsModalVisible}
+          feedId={commentsPostId}
+          commentsCount={commentsPostCount}
+          onClose={() => setCommentsModalVisible(false)}
+          onCommentAdded={() => {
+            // Update comments stats locally
+            setPosts(prev => prev.map(p => {
+              if (p.id === commentsPostId) {
+                const currentComments = p.stats?.comments ?? 0;
+                return {
+                  ...p,
+                  comments_count: currentComments + 1,
+                  stats: p.stats ? { ...p.stats, comments: currentComments + 1 } : { reactions: p.likes_count, comments: currentComments + 1, shares: 0, views: 0 }
+                };
+              }
+              return p;
+            }));
+            setCommentsPostCount(prev => prev + 1);
+          }}
+        />
+      )}
+
+      {/* Custom Edit Post Modal */}
+      <Modal
+        visible={isEditModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsEditModalVisible(false)}
+      >
+        <View style={styles.editModalOverlay}>
+          <View style={styles.editModalContainer}>
+            <Text style={styles.editModalTitle}>Edit Post</Text>
+            <TextInput
+              style={styles.editTextInput}
+              value={editingTextState}
+              onChangeText={setEditingTextState}
+              multiline
+              maxLength={2000}
+              placeholder="Update your eco action..."
+            />
+            <View style={styles.editModalActions}>
+              <TouchableOpacity
+                style={[styles.editModalBtn, styles.editCancelBtn]}
+                onPress={() => {
+                  setIsEditModalVisible(false);
+                  setEditingPost(null);
+                }}
+              >
+                <Text style={styles.editCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.editModalBtn, styles.editSaveBtn]}
+                onPress={handleSaveEdit}
+                disabled={editSubmitting || !editingTextState.trim()}
+              >
+                {editSubmitting ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Text style={styles.editSaveText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -1202,30 +2559,39 @@ const styles = StyleSheet.create({
     marginLeft: 14,
     padding: 4,
   },
-  tabBar: {
+  headerSegmentedControl: {
+    position: 'absolute',
+    left: '50%',
+    marginLeft: -70,
+    bottom: 12,
     flexDirection: 'row',
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    padding: 2,
+    width: 140,
   },
-  tabBtn: {
+  headerSegmentBtn: {
     flex: 1,
+    paddingVertical: 6,
+    borderRadius: 18,
     alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
+    justifyContent: 'center',
   },
-  tabBtnActive: {
-    borderBottomColor: AppColors.primary,
+  headerSegmentBtnActive: {
+    backgroundColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 1.5,
+    elevation: 2,
   },
-  tabText: {
-    fontSize: 16,
+  headerSegmentText: {
+    fontSize: 12,
     fontWeight: '600',
     color: AppColors.textMedium,
   },
-  tabTextActive: {
+  headerSegmentTextActive: {
     color: AppColors.primary,
-    fontWeight: 'bold',
   },
   content: {
     flex: 1,
@@ -1237,57 +2603,52 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   storyCard: {
-    width: 110,
-    height: 170,
-    borderRadius: 14,
+    width: 115,
+    height: 165,
+    borderRadius: 16,
     marginRight: 12,
     overflow: 'hidden',
-    position: 'relative',
-    elevation: 3,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   storyCardBg: {
     width: '100%',
-    height: '100%',
-    position: 'absolute',
+    height: 95,
   },
   storyCardOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-  },
-  storyCardAvatarRing: {
     position: 'absolute',
-    top: 10,
-    left: 10,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: AppColors.primary,
-    padding: 1,
-    backgroundColor: 'white',
-    justifyContent: 'center',
+    top: 6,
+    right: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  storyCardContent: {
+    padding: 8,
+    flexDirection: 'row',
     alignItems: 'center',
+    height: 70,
   },
   storyCardAvatar: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: AppColors.primary,
   },
   storyCardName: {
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    right: 10,
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: 'white',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    fontSize: 10,
+    fontWeight: '700',
+    color: AppColors.textDark,
+    marginLeft: 6,
+    flex: 1,
   },
   tipCard: {
     backgroundColor: '#EEFDFC',
@@ -1420,16 +2781,23 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   postsList: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
   },
   postCard: {
     backgroundColor: 'white',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#ECECEC',
-    elevation: 1,
+    borderRadius: 0,
+    paddingTop: 12,
+    paddingBottom: 12,
+    marginBottom: 16,
+    borderWidth: 0,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#F0F0F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
   postAuthorRow: {
     flexDirection: 'row',
@@ -1466,21 +2834,26 @@ const styles = StyleSheet.create({
   },
   postImage: {
     width: '100%',
-    height: 180,
-    borderRadius: 10,
-    marginBottom: 12,
+    height: '100%',
   },
   carouselContainer: {
     position: 'relative',
-    height: 180,
+    height: '100%',
     width: '100%',
-    borderRadius: 10,
     overflow: 'hidden',
-    marginBottom: 12,
   },
   postCarouselImage: {
-    width: SCREEN_WIDTH - 66, // matching post padding
-    height: 180,
+    width: SCREEN_WIDTH,
+    height: '100%',
+  },
+  muteIndicator: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 14,
+    padding: 6,
+    zIndex: 10,
   },
   carouselIndicator: {
     position: 'absolute',
@@ -1492,12 +2865,80 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     flexDirection: 'row',
     alignItems: 'center',
+    zIndex: 10,
   },
   carouselIndicatorText: {
     color: 'white',
     fontSize: 10,
     fontWeight: 'bold',
     marginLeft: 4,
+  },
+  // Modern Video Controls Styles
+  controlsContainer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'space-between',
+    zIndex: 10,
+  },
+  centerPlayContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlsPanel: {
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 16 : 8,
+    paddingHorizontal: 12,
+  },
+  progressBarWrapper: {
+    height: 12,
+    justifyContent: 'center',
+    width: '100%',
+    marginBottom: 6,
+  },
+  progressBarTrack: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: AppColors.primary,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  controlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  controlBtn: {
+    padding: 6,
+  },
+  timeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '600',
+    minWidth: 75,
+    textAlign: 'center',
+  },
+  volumePercentText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+    minWidth: 26,
+    textAlign: 'center',
   },
   pollCard: {
     backgroundColor: '#F8FAFC',
@@ -1582,6 +3023,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   pillBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#F3F4F6',
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1602,6 +3045,63 @@ const styles = StyleSheet.create({
   pillTextActive: {
     color: AppColors.primary,
     fontWeight: 'bold',
+  },
+  createBarContainer: {
+    paddingHorizontal: 16,
+    marginVertical: 8,
+  },
+  createBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  createBarAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E5E7EB',
+  },
+  createBarAvatarPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  createBarAvatarText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: AppColors.textMedium,
+  },
+  createBarInputPlaceholder: {
+    flex: 1,
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  createBarBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  createBarBtnText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '700',
   },
   fab: {
     position: 'absolute',
@@ -1628,67 +3128,349 @@ const styles = StyleSheet.create({
   },
   groupCard: {
     backgroundColor: 'white',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
+    borderRadius: 16,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#ECECEC',
+    borderColor: '#F0F0F0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 3,
   },
-  groupHeader: {
+  groupCardBannerContainer: {
+    height: 120,
+    width: '100%',
+    position: 'relative',
+    backgroundColor: '#F5F5F5',
+  },
+  groupCardBanner: {
+    width: '100%',
+    height: '100%',
+  },
+  groupPrivacyBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  groupPrivacyText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  groupProfileOverlayRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginTop: -28, // Overlap cover banner
+    alignItems: 'flex-end',
+    marginBottom: 12,
+  },
+  groupAvatarContainer: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    borderWidth: 3,
+    borderColor: 'white',
+    backgroundColor: 'white',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  groupCardModernized: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 3,
+    marginBottom: 16,
+    position: 'relative',
+  },
+  groupPrivacyBadgeModernized: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: '#F3F4F6',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    gap: 4,
+    zIndex: 10,
+  },
+  groupPrivacyTextModernized: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: AppColors.textMedium,
+  },
+  groupCardContentModernized: {
+    padding: 16,
+  },
+  groupCardMainRowModernized: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
   },
-  groupIconContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 8,
-    backgroundColor: '#E6F4EA',
-    justifyContent: 'center',
+  groupCardLogoModernized: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  groupCardLogoPlaceholderModernized: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: AppColors.primary + '15',
     alignItems: 'center',
-    overflow: 'hidden',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: AppColors.primary + '25',
   },
-  groupCoverImage: {
-    width: 44,
-    height: 44,
+  groupCardTitleBlockModernized: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  groupCardNameModernized: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: AppColors.textDark,
+  },
+  groupCardCategoryTextModernized: {
+    fontSize: 11,
+    color: AppColors.primary,
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  groupCardTaglineModernized: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  groupCardMetaInfoRowModernized: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  groupCardMembersIndicatorModernized: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  groupCardMembersIndicatorTextModernized: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    fontWeight: '500',
+  },
+  groupCardRoleLabelPillModernized: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
     borderRadius: 8,
   },
-  groupDetails: {
-    marginLeft: 12,
-    flex: 1,
+  groupCardRoleLabelPillTextModernized: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
   },
-  groupName: {
-    fontSize: 15,
+  groupCardDescModernized: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  groupCardDividerModernized: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginVertical: 4,
+    marginBottom: 12,
+  },
+  groupCardActionButtonsRowModernized: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  groupCardDetailsActionBtnModernized: {
+    flex: 1.2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: AppColors.primary + '40',
+    gap: 4,
+  },
+  groupCardDetailsActionBtnTextModernized: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: AppColors.primary,
+  },
+  groupCardJoinActionBtnModernized: {
+    flex: 1.2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: AppColors.primary,
+    gap: 5,
+  },
+  groupCardJoinActionBtnMemberModernized: {
+    backgroundColor: 'white',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  groupCardJoinActionBtnPendingModernized: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1.5,
+    borderColor: '#D97706',
+  },
+  groupCardJoinActionBtnTextModernized: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'white',
+  },
+  groupCardJoinActionBtnTextMemberModernized: {
+    color: AppColors.primary,
+  },
+  groupCardJoinActionBtnTextPendingModernized: {
+    color: '#D97706',
+  },
+  groupAvatar: {
+    width: '100%',
+    height: '100%',
+  },
+  groupTitleContainer: {
+    flex: 1,
+    marginLeft: 12,
+    paddingBottom: 2,
+  },
+  groupNameText: {
+    fontSize: 16,
     fontWeight: 'bold',
     color: AppColors.textDark,
   },
-  groupMeta: {
+  groupMetaText: {
     fontSize: 11,
     color: AppColors.textMedium,
     marginTop: 2,
   },
-  groupDesc: {
+  groupCardBody: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  groupDescText: {
     fontSize: 13,
     color: AppColors.textMedium,
     lineHeight: 18,
     marginBottom: 14,
   },
-  groupActionBtn: {
-    backgroundColor: AppColors.primary,
-    borderRadius: 8,
+  groupStatsRowModern: {
+    flexDirection: 'row',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
     paddingVertical: 10,
+    paddingHorizontal: 8,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+  },
+  groupStatBoxModern: {
+    flex: 1,
     alignItems: 'center',
   },
-  groupActionBtnJoined: {
+  statIconCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  statValModern: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: AppColors.textDark,
+  },
+  statLabelModern: {
+    fontSize: 9,
+    color: AppColors.textLight,
+    marginTop: 1,
+  },
+  groupCardFooterModern: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  mutualFriendsContainerModern: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  mutualAvatarModern: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: 'white',
+  },
+  mutualFriendsTextModern: {
+    fontSize: 11,
+    color: AppColors.textMedium,
+    marginLeft: 6,
+  },
+  ecoInitiativeText: {
+    fontSize: 11,
+    color: '#0D9488',
+    fontWeight: '600',
+  },
+  groupActionBtnModern: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 90,
+  },
+  groupActionBtnJoinedModern: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: AppColors.primary,
+  },
+  groupActionBtnPendingModern: {
     backgroundColor: '#F3F4F6',
   },
-  groupActionText: {
+  groupActionTextModern: {
     color: 'white',
-    fontWeight: 'bold',
-    fontSize: 14,
+    fontWeight: '700',
+    fontSize: 13,
   },
-  groupActionTextJoined: {
-    color: AppColors.textDark,
+  groupActionTextJoinedModern: {
+    color: AppColors.primary,
+  },
+  groupActionTextPendingModern: {
+    color: AppColors.textMedium,
   },
   overlay: {
     position: 'absolute',
@@ -1838,15 +3620,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
 
-  // Stories Fullscreen Slideshow styles
+  // Stories Pop-up Glass Modal styles - REDESIGNED FULL SCREEN EXPERIENCE
+  storyModalOverlay: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  storyModalBackdrop: {
+    ...StyleSheet.absoluteFill,
+  },
   storyViewerContainer: {
     flex: 1,
-    backgroundColor: 'black',
+    backgroundColor: '#000',
+  },
+  storyInnerWrapper: {
+    flex: 1,
+    position: 'relative',
   },
   storyViewerImageWrapper: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: '#000',
     position: 'relative',
   },
   storyViewerImage: {
@@ -1854,20 +3646,16 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   storyViewerGestureOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFill,
     flexDirection: 'row',
   },
   storyProgressContainer: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 56 : 24,
     left: 16,
     right: 16,
     flexDirection: 'row',
     height: 3,
+    zIndex: 20,
   },
   storyProgressBar: {
     flex: 1,
@@ -1876,11 +3664,11 @@ const styles = StyleSheet.create({
   },
   storyViewerHeader: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 70 : 36,
     left: 16,
     right: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    zIndex: 20,
   },
   storyViewerAvatar: {
     width: 36,
@@ -1895,25 +3683,539 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginLeft: 10,
     flex: 1,
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
   },
   storyViewerCloseBtn: {
     padding: 4,
   },
   storyViewerFooter: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 48 : 24,
-    left: 20,
-    right: 20,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'flex-start',
+    zIndex: 20,
+  },
+  storyMuteBtn: {
+    padding: 6,
+    marginRight: 4,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 14,
+  },
+  storyActionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 14,
+    flexWrap: 'wrap',
+  },
+  storyActionBtn: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  storyActionCount: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  storyReactionPicker: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 28,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+  },
+  storyReactionEmoji: {
+    padding: 2,
+  },
+  storyReactionSummary: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+  storyReactionSummaryItem: {
+    color: 'white',
+    fontSize: 13,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  storyBubbleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 8,
+    flexWrap: 'wrap',
+  },
+  storyBubbleTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  storyAvatarOverlap: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
+  storyOverlapAvatar: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'white',
+  },
+  storyBubbleText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  storyListModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  storyListModalContent: {
+    width: '90%',
+    maxHeight: '70%',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  storyListModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#ECEFF1',
+    paddingBottom: 10,
+    marginBottom: 10,
+  },
+  storyListModalTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: AppColors.textDark,
+  },
+  storyListModalEmpty: {
+    textAlign: 'center',
+    color: AppColors.textLight,
+    marginVertical: 20,
+  },
+  storyListUserItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#CFD8DC',
+  },
+  storyListUserAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginRight: 12,
+  },
+  storyListUserName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: AppColors.textDark,
+  },
+  storyListUserDisplay: {
+    fontSize: 12,
+    color: AppColors.textLight,
+  },
+  storyCommentSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#1A1A2E',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    zIndex: 30,
+    maxHeight: '65%',
+  },
+  storyCommentSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  storyCommentSheetTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  storyCommentEmpty: {
+    color: '#888',
+    textAlign: 'center',
+    marginVertical: 16,
+    fontSize: 13,
+  },
+  storyCommentItem: {
+    marginBottom: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+    paddingBottom: 8,
+  },
+  storyCommentRow: {
+    flexDirection: 'column',
+  },
+  storyCommentUser: {
+    color: '#A78BFA',
+    fontWeight: '700',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  storyCommentContent: {
+    color: '#E2E8F0',
+    fontSize: 13,
+  },
+  storyCommentReplyToggle: {
+    color: '#60A5FA',
+    fontSize: 11,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  storyRepliesBlock: {
+    marginLeft: 12,
+    marginTop: 6,
+  },
+  storyReplyItem: {
+    marginBottom: 6,
+    paddingLeft: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: 'rgba(167,139,250,0.4)',
+  },
+  storyReplyInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    gap: 8,
+  },
+  storyReplyInput: {
+    flex: 1,
+    color: 'white',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    fontSize: 12,
+  },
+  storyCommentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+    paddingTop: 10,
+  },
+  storyCommentInput: {
+    flex: 1,
+    color: 'white',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    fontSize: 14,
+  },
+
   storyViewerTitle: {
     color: 'white',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
     textAlign: 'center',
+    lineHeight: 18,
+  },
+  groupStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginVertical: 10,
+  },
+  groupStatItem: {
+    flex: 1,
+    alignItems: 'center',
+    flexDirection: 'column',
+  },
+  groupStatValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: AppColors.textDark,
+    marginTop: 2,
+  },
+  groupStatLabel: {
+    fontSize: 10,
+    color: AppColors.textLight,
+  },
+  groupDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#E5E7EB',
+  },
+  mutualFriendsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  avatarOverlapContainer: {
+    flexDirection: 'row',
+    marginRight: 6,
+  },
+  mutualAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: 'white',
+  },
+  mutualFriendsText: {
+    fontSize: 11,
+    color: AppColors.textMedium,
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: AppColors.error,
+    borderRadius: 8,
+    minWidth: 15,
+    height: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 2,
+  },
+  notifBadgeText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: 'bold',
+  },
+  editModalOverlay: {
+    flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  editModalContainer: {
+    width: '100%',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    maxHeight: '70%',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  editModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: AppColors.textDark,
+    marginBottom: 12,
+  },
+  editTextInput: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    color: AppColors.textDark,
+    height: 120,
+    textAlignVertical: 'top',
+    marginBottom: 16,
+    backgroundColor: '#F8FAFC',
+  },
+  editModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  editModalBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editCancelBtn: {
+    backgroundColor: '#F3F4F6',
+  },
+  editCancelText: {
+    color: AppColors.textMedium,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  editSaveBtn: {
+    backgroundColor: AppColors.primary,
+  },
+  editSaveText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  coffeeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFDD00',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 12,
     borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  coffeeIconBg: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coffeeTextContainer: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  coffeeTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  coffeeSubtitle: {
+    fontSize: 10,
+    color: '#374151',
+    marginTop: 1,
+    fontWeight: '500',
+  },
+  coffeeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  coffeeBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#000000',
+    textTransform: 'uppercase',
+  },
+  createStoryCardCenter: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  createStoryIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: AppColors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: AppColors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  createStoryCardText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: 'white',
+    marginTop: 8,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  storyCardUserInfo: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 20,
+    maxWidth: '90%',
+  },
+  storyViewerDesc: {
+    color: 'rgba(255, 255, 255, 0.85)',
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 6,
+  },
+  storyMetaOverlayRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  storyMetaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  storyMetaBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  storySwipeUpBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: AppColors.primary,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  storySwipeUpText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginLeft: 4,
   },
 });

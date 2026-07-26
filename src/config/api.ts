@@ -1,6 +1,6 @@
 export const ApiConfig = {
-  baseUrl: 'http://192.168.20.111:8000',
-  apiUrl: 'http://192.168.20.111:8000/api',
+  baseUrl: 'http://192.168.1.58:8000',
+  apiUrl: 'http://192.168.1.58:8000/api',
 
   // Authentication endpoints
   authLogin: '/auth/login',

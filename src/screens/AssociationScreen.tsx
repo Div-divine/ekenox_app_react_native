@@ -14,6 +14,7 @@ import {
   Modal,
   Dimensions,
   Platform,
+  Animated, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
@@ -38,6 +39,25 @@ const CATEGORIES = [
 ];
 
 type TabFilter = 'all' | 'mine';
+
+const parseSafeDate = (dateStr?: string | null): Date | null => {
+  if (!dateStr) return null;
+  if ((dateStr as any) instanceof Date) return dateStr as unknown as Date;
+  let parsed = new Date(dateStr);
+  if (!isNaN(parsed.getTime())) return parsed;
+  const cleaned = String(dateStr).replace(' ', 'T');
+  parsed = new Date(cleaned);
+  if (!isNaN(parsed.getTime())) return parsed;
+  return null;
+};
+
+const formatDate = (iso?: string | null) => {
+  const d = parseSafeDate(iso);
+  if (!d) return '';
+  return d.toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
+};
 
 export const AssociationScreen = () => {
   const insets = useSafeAreaInsets();
@@ -69,6 +89,7 @@ export const AssociationScreen = () => {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstMount = useRef(true);
 
   // Modals state
   const [myRequestsModalVisible, setMyRequestsModalVisible] = useState(false);
@@ -87,11 +108,41 @@ export const AssociationScreen = () => {
   const [resumeSelected, setResumeSelected] = useState(false);
   const [joinFormConfig, setJoinFormConfig] = useState<any | null>(null);
 
+  const isJoinFormValid = () => {
+    if (joinFormConfig?.require_motif && !joinMessage.trim()) return false;
+    if (joinFormConfig?.enable_resume_upload && !resumeSelected) return false;
+    if (joinFormConfig?.enable_portfolio_links && !portfolioLink.trim()) return false;
+    if (joinFormConfig?.enable_preferred_role && !preferredRole.trim()) return false;
+    return true;
+  };
+
   const [favoritesModalVisible, setFavoritesModalVisible] = useState(false);
   const [favoritesList, setFavoritesList] = useState<Association[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
 
-  // ─── Fetching Logic ─────────────────────────────────────────────────────────
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const HEADER_HEIGHT = 60 + insets.top;
+  const headerTranslateY = Animated.diffClamp(scrollY, 0, HEADER_HEIGHT).interpolate({
+    inputRange: [0, HEADER_HEIGHT],
+    outputRange: [0, -HEADER_HEIGHT],
+  });
+
+  const createBarTranslateY = Animated.diffClamp(scrollY, 0, 60).interpolate({
+    inputRange: [0, 60],
+    outputRange: [0, -60],
+  });
+
+  const START_Y = 50 + 44 + 12 + (tabFilter === 'all' ? 50 : 0);
+  const absoluteBarOpacity = scrollY.interpolate({
+    inputRange: [START_Y - 20, START_Y],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  useEffect(() => {
+    scrollY.setValue(0);
+  }, [tabFilter]);
 
   const loadAssociations = useCallback(async (opts?: { reset?: boolean; search?: string; category?: string; filter?: TabFilter }) => {
     const newPage = opts?.reset ? 1 : page;
@@ -269,8 +320,12 @@ export const AssociationScreen = () => {
   useEffect(() => {
     setIsLoading(true);
     loadAssociations({ reset: true });
-    loadCountsAndBanners();
-    loadPendingTransfers();
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+    } else {
+      loadCountsAndBanners();
+      loadPendingTransfers();
+    }
   }, [tabFilter]);
 
   useEffect(() => {
@@ -530,6 +585,12 @@ export const AssociationScreen = () => {
                 {item.is_verified && (
                   <Ionicons name="checkmark-circle" size={15} color="#1D4ED8" style={{ marginLeft: 4 }} />
                 )}
+                {item.is_private && (
+                  <View style={styles.privateAssoBadge}>
+                    <Ionicons name="lock-closed" size={10} color="#EF4444" style={{ marginRight: 2 }} />
+                    <Text style={styles.privateAssoBadgeText}>Private</Text>
+                  </View>
+                )}
               </View>
               <Text style={styles.cardCategoryText}>{item.category}</Text>
               {item.short_tagline ? (
@@ -635,6 +696,87 @@ export const AssociationScreen = () => {
 
   const renderHeader = () => (
     <>
+      {/* ─── Tabs Filter Switch ─── */}
+      <View style={[styles.toggleTabBar, { borderBottomWidth: 0, paddingHorizontal: 0 }]}>
+        <TouchableOpacity
+          style={[styles.toggleTab, tabFilter === 'all' && styles.toggleTabActive]}
+          onPress={() => { setTabFilter('all'); setIsLoading(true); }}
+        >
+          <Ionicons name="earth" size={14} color={tabFilter === 'all' ? AppColors.primary : AppColors.textMedium} />
+          <Text style={[styles.toggleTabText, tabFilter === 'all' && styles.toggleTabTextActive]}>Discover</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.toggleTab, tabFilter === 'mine' && styles.toggleTabActive]}
+          onPress={() => { setTabFilter('mine'); setIsLoading(true); }}
+        >
+          <Ionicons name="heart" size={14} color={tabFilter === 'mine' ? AppColors.primary : AppColors.textMedium} />
+          <Text style={[styles.toggleTabText, tabFilter === 'mine' && styles.toggleTabTextActive]}>My Associations</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ─── Search & Category Row ─── */}
+      <View style={[styles.searchSection, { borderBottomWidth: 0, paddingBottom: 0 }]}>
+        <View style={styles.searchBarWrap}>
+          <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchBarIcon} />
+          <TextInput
+            style={styles.searchBarInput}
+            placeholder="Search associations..."
+            placeholderTextColor={AppColors.textMedium}
+            value={searchQuery}
+            onChangeText={handleSearch}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => { setSearchQuery(''); loadAssociations({ reset: true, search: '' }); }}>
+              <Ionicons name="close-circle" size={18} color={AppColors.textMedium} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {tabFilter === 'all' && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.categoryChipsScroll}
+            contentContainerStyle={styles.categoryChipsContent}
+          >
+            {CATEGORIES.map(cat => {
+              const isActive = selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={[styles.categoryChip, isActive && styles.categoryChipActive]}
+                  onPress={() => handleCategoryChange(cat)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </View>
+
+      {/* ── Top Create Association Bar ── */}
+      <View style={styles.createAssocBarCard}>
+        <TouchableOpacity
+          style={styles.createAssocBarContent}
+          onPress={() => navigation.navigate('CreateAssociation')}
+          activeOpacity={0.85}
+        >
+          <View style={styles.createAssocBarIconHolder}>
+            <Ionicons name="business" size={18} color={AppColors.primary} />
+          </View>
+          <Text style={styles.createAssocBarInputPlaceholder}>Create or register a new eco association…</Text>
+          <View style={styles.createAssocBarBtn}>
+            <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+            <Text style={styles.createAssocBarBtnText}>Create Association</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
       {/* Pending invitations top banner */}
       {pendingInvitations.length > 0 && (
         <View style={styles.bannerContainer}>
@@ -717,7 +859,7 @@ export const AssociationScreen = () => {
                     </Text>
                   )}
                   <Text style={styles.transferDateText}>
-                    Date: {new Date(demand.created_at).toLocaleDateString()}
+                    Date: {formatDate(demand.created_at)}
                   </Text>
                 </View>
 
@@ -800,8 +942,24 @@ export const AssociationScreen = () => {
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="white" />
+
       {/* ─── Premium Header / AppBar ─── */}
-      <View style={[styles.appBar, { paddingTop: insets.top, height: 60 + insets.top }]}>
+      <Animated.View
+        style={[
+          styles.appBar,
+          {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            paddingTop: insets.top,
+            height: 60 + insets.top,
+            transform: [{ translateY: headerTranslateY }],
+          },
+        ]}
+      >
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
         </TouchableOpacity>
@@ -849,89 +1007,67 @@ export const AssociationScreen = () => {
             </TouchableOpacity>
           )}
         </View>
-      </View>
+      </Animated.View>
 
-      {/* ─── Tabs Filter Switch ─── */}
-      <View style={styles.toggleTabBar}>
-        <TouchableOpacity
-          style={[styles.toggleTab, tabFilter === 'all' && styles.toggleTabActive]}
-          onPress={() => { setTabFilter('all'); setIsLoading(true); }}
+      {/* Sticky Create Association Bar Overlay */}
+      {!isLoading && (
+        <Animated.View
+          style={[
+            styles.createAssocBarCard,
+            {
+              position: 'absolute',
+              top: 60 + insets.top,
+              left: 0,
+              right: 0,
+              zIndex: 99,
+              marginVertical: 0,
+              paddingVertical: 8,
+              backgroundColor: '#F5F5F7',
+              opacity: absoluteBarOpacity,
+              transform: [{ translateY: createBarTranslateY }],
+            },
+          ]}
         >
-          <Ionicons name="earth" size={14} color={tabFilter === 'all' ? AppColors.primary : AppColors.textMedium} />
-          <Text style={[styles.toggleTabText, tabFilter === 'all' && styles.toggleTabTextActive]}>Discover</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.toggleTab, tabFilter === 'mine' && styles.toggleTabActive]}
-          onPress={() => { setTabFilter('mine'); setIsLoading(true); }}
-        >
-          <Ionicons name="heart" size={14} color={tabFilter === 'mine' ? AppColors.primary : AppColors.textMedium} />
-          <Text style={[styles.toggleTabText, tabFilter === 'mine' && styles.toggleTabTextActive]}>My Associations</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ─── Search & Category Row ─── */}
-      <View style={styles.searchSection}>
-        <View style={styles.searchBarWrap}>
-          <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchBarIcon} />
-          <TextInput
-            style={styles.searchBarInput}
-            placeholder="Search associations..."
-            placeholderTextColor={AppColors.textMedium}
-            value={searchQuery}
-            onChangeText={handleSearch}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => { setSearchQuery(''); loadAssociations({ reset: true, search: '' }); }}>
-              <Ionicons name="close-circle" size={18} color={AppColors.textMedium} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {tabFilter === 'all' && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.categoryChipsScroll}
-            contentContainerStyle={styles.categoryChipsContent}
+          <TouchableOpacity
+            style={styles.createAssocBarContent}
+            onPress={() => navigation.navigate('CreateAssociation')}
+            activeOpacity={0.85}
           >
-            {CATEGORIES.map(cat => {
-              const isActive = selectedCategory === cat;
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  style={[styles.categoryChip, isActive && styles.categoryChipActive]}
-                  onPress={() => handleCategoryChange(cat)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>
-                    {cat}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        )}
-      </View>
+            <View style={styles.createAssocBarIconHolder}>
+              <Ionicons name="business" size={18} color={AppColors.primary} />
+            </View>
+            <Text style={styles.createAssocBarInputPlaceholder}>Create or register a new eco association…</Text>
+            <View style={styles.createAssocBarBtn}>
+              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+              <Text style={styles.createAssocBarBtnText}>Create Association</Text>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
 
       {/* ─── Associations List ─── */}
       {isLoading && associations.length === 0 ? (
-        <View style={styles.loaderContainer}>
+        <View style={[styles.loaderContainer, { paddingTop: 60 + insets.top }]}>
           <ActivityIndicator size="large" color={AppColors.primary} />
           <Text style={styles.loaderText}>Loading eco associations...</Text>
         </View>
       ) : (
-        <FlatList
+        <Animated.FlatList
           data={associations}
           renderItem={renderAssociationCard}
           keyExtractor={item => String(item.id)}
-          contentContainerStyle={styles.listContainerStyle}
+          contentContainerStyle={[styles.listContainerStyle, { paddingTop: 60 + insets.top }]}
           ListHeaderComponent={renderHeader}
           ListEmptyComponent={renderEmpty}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
           }
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+          scrollEventThrottle={16}
           onEndReached={() => { if (hasMore && !isLoading) loadAssociations(); }}
           onEndReachedThreshold={0.4}
           ListFooterComponent={
@@ -944,14 +1080,7 @@ export const AssociationScreen = () => {
         />
       )}
 
-      {/* ─── Create Association FAB ─── */}
-      <TouchableOpacity
-        style={styles.floatingActionBtn}
-        onPress={() => navigation.navigate('CreateAssociation')}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="add" size={28} color="white" />
-      </TouchableOpacity>
+
 
       {/* ─────────────────────────────────────────────────────────────────────────────
           MODAL 1: MY SENT REQUESTS BOTTOM SHEET
@@ -979,7 +1108,7 @@ export const AssociationScreen = () => {
                     <View style={styles.requestCardHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.requestAssocName}>{req.association?.name || 'Eco Association'}</Text>
-                        <Text style={styles.requestDate}>Requested on: {new Date(req.created_at).toLocaleDateString()}</Text>
+                        <Text style={styles.requestDate}>Requested on: {formatDate(req.created_at)}</Text>
                       </View>
                       <View style={styles.pendingIndicatorTag}>
                         <Text style={styles.pendingIndicatorTagText}>Pending</Text>
@@ -1131,7 +1260,7 @@ export const AssociationScreen = () => {
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.applicantName}>{req.user?.full_name || 'Unknown User'}</Text>
-                        <Text style={styles.applicantDate}>Sent: {new Date(req.created_at).toLocaleDateString()}</Text>
+                        <Text style={styles.applicantDate}>Sent: {formatDate(req.created_at)}</Text>
                       </View>
 
                       {/* Approve / Reject buttons */}
@@ -1255,9 +1384,14 @@ export const AssociationScreen = () => {
             </ScrollView>
 
             <TouchableOpacity
-              style={[styles.joinActionBtn, { width: '100%', marginTop: 12, height: 44 }]}
+              style={[
+                styles.joinActionBtn,
+                { width: '100%', marginTop: 12, height: 44 },
+                !isJoinFormValid() && { backgroundColor: AppColors.textLight, borderColor: AppColors.textLight }
+              ]}
               onPress={() => {
                 if (!selectedJoinAssoc) return;
+                if (!isJoinFormValid()) return;
                 const payload: any = {};
                 if (joinFormConfig?.enable_resume_upload && resumeSelected) {
                   payload.resume_url = 'attached_resume.pdf';
@@ -1269,15 +1403,9 @@ export const AssociationScreen = () => {
                   payload.portfolio_links = [portfolioLink];
                 }
 
-                // Check if motif is required but empty
-                if (joinFormConfig?.require_motif && !joinMessage.trim()) {
-                  Alert.alert('Required field missing', 'Please enter your reason for joining.');
-                  return;
-                }
-
                 handleJoinSubmit(selectedJoinAssoc.id, joinMessage || undefined, payload);
               }}
-              disabled={actionLoadingId === selectedJoinAssoc?.id}
+              disabled={!isJoinFormValid() || actionLoadingId === selectedJoinAssoc?.id}
             >
               {actionLoadingId === selectedJoinAssoc?.id ? (
                 <ActivityIndicator color="white" />
@@ -1689,6 +1817,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
+  },
+  privateAssoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    marginLeft: 6,
+  },
+  privateAssoBadgeText: {
+    color: '#EF4444',
+    fontSize: 9,
+    fontWeight: '700',
   },
   cardName: {
     fontSize: 16,
@@ -2328,6 +2470,52 @@ const styles = StyleSheet.create({
   },
   cancelLinkText: {
     color: AppColors.error,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  createAssocBarCard: {
+    paddingHorizontal: 16,
+    marginVertical: 8,
+  },
+  createAssocBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  createAssocBarIconHolder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#CCFAF6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  createAssocBarInputPlaceholder: {
+    flex: 1,
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  createAssocBarBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  createAssocBarBtnText: {
+    color: 'white',
     fontSize: 12,
     fontWeight: '700',
   },
