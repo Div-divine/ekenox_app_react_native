@@ -14,9 +14,7 @@ export interface AssociationMember {
     full_name: string;
     profile_image?: string | null;
   };
-  role: {
-    name: string;
-  };
+  role: Role;
   joined_at: string;
   is_following?: boolean;
   is_muted?: boolean;
@@ -132,8 +130,54 @@ export interface AdminTransferDemand {
 }
 
 export interface Role {
-  id: string | number;
+  id?: string | number;
   name: string;
+  display_name?: string;
+  displayName?: string;
+}
+
+// ─── Normalization helpers ───────────────────────────────────────────────────
+// The API occasionally returns roles as objects (`{ name, display_name, ... }`)
+// instead of plain strings. These helpers guarantee the UI always receives a
+// plain string for `current_user_role` and a safe object for member roles.
+
+type RoleLike = string | Role | null | undefined;
+
+function roleName(role: RoleLike): string {
+  if (!role) return '';
+  if (typeof role === 'string') return role;
+  return role.display_name || role.displayName || role.name || String(role.id || '');
+}
+
+function roleObject(role: RoleLike): Role {
+  if (!role) return { name: '', display_name: '', displayName: '' };
+  if (typeof role === 'string') return { name: role, display_name: role, displayName: role };
+  const name = roleName(role);
+  return {
+    ...role,
+    name,
+    display_name: role.display_name || role.displayName || name,
+    displayName: role.display_name || role.displayName || name,
+  };
+}
+
+function normalizeMember(member: any): AssociationMember {
+  if (!member) return member;
+  return {
+    ...member,
+    role: roleObject(member.role),
+  };
+}
+
+function normalizeAssociation(assoc: any): Association {
+  if (!assoc) return assoc;
+  const out = { ...assoc };
+  if (typeof out.current_user_role !== 'string') {
+    out.current_user_role = roleName(out.current_user_role) || null;
+  }
+  if (Array.isArray(out.members)) out.members = out.members.map(normalizeMember);
+  if (Array.isArray(out.top_members)) out.top_members = out.top_members.map(normalizeMember);
+  return out;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -151,16 +195,27 @@ const BASE = ApiConfig.apiUrl;
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 class AssociationService {
-  /** List associations with optional search / category / page */
+  /** List associations with optional search / category / category_id / page */
   async getAssociations(params?: {
     search?: string;
     category?: string;
+    category_id?: number | number[] | string;
     page?: number;
     limit?: number;
   }): Promise<{ data: Association[]; pagination: any }> {
     const headers = await getHeaders();
     const res = await axios.get(`${BASE}/associations`, { headers, params });
-    return { data: res.data.data ?? [], pagination: res.data.pagination ?? {} };
+    return {
+      data: (res.data.data ?? []).map(normalizeAssociation),
+      pagination: res.data.pagination ?? {},
+    };
+  }
+
+  /** Get all active categories for associations */
+  async getCategories(): Promise<any[]> {
+    const headers = await getHeaders();
+    const res = await axios.get(`${BASE}/associations/categories`, { headers });
+    return res.data.data ?? [];
   }
 
   /** My associations only */
@@ -170,14 +225,14 @@ class AssociationService {
       headers,
       params: { page, limit },
     });
-    return res.data.data ?? [];
+    return (res.data.data ?? []).map(normalizeAssociation);
   }
 
   /** Single association detail */
   async getAssociationById(id: string | number): Promise<Association | null> {
     const headers = await getHeaders();
     const res = await axios.get(`${BASE}/associations/${id}`, { headers });
-    return res.data.data ?? null;
+    return normalizeAssociation(res.data.data ?? null);
   }
 
   /** Toggle favorite (follow) */
@@ -233,7 +288,7 @@ class AssociationService {
       headers,
       params: { page, limit },
     });
-    return res.data.data ?? [];
+    return (res.data.data ?? []).map(normalizeMember);
   }
 
   /** Get join requests for an association (admin/mod only) */
@@ -277,7 +332,7 @@ class AssociationService {
       headers,
       params: { page, limit },
     });
-    return res.data.data ?? [];
+    return (res.data.data ?? []).map(normalizeAssociation);
   }
 
   /** My all join requests (all statuses) */
@@ -561,28 +616,25 @@ class AssociationService {
 
     const formData = new FormData();
 
-    if (profileImageUri) {
-      const filename = profileImageUri.split('/').pop() || 'profile.jpg';
+    const toBlob = (uri: string, fallbackName: string) => {
+      const filename = uri.split('?')[0].split('/').pop() || fallbackName;
       const match = /\.(\w+)$/.exec(filename);
-      const type = match ? `image/${match[1]}` : 'image/jpeg';
+      let type = match ? `image/${match[1]}` : 'image/jpeg';
+      if (type === 'image/jpg') type = 'image/jpeg';
+      if (type === 'image/heic' || type === 'image/heif') type = 'image/jpeg';
+      return { uri, name: filename, type } as any;
+    };
 
-      formData.append('profile_image', {
-        uri: profileImageUri,
-        name: filename,
-        type,
-      } as any);
+    if (profileImageUri) {
+      const file = toBlob(profileImageUri, 'profile.jpg');
+      // Some endpoints call the cover/profile field `cover_image`, others
+      // `profile_image`; send both aliases so the update always lands.
+      formData.append('profile_image', file);
+      formData.append('cover_image', file);
     }
 
     if (logoImageUri) {
-      const filename = logoImageUri.split('/').pop() || 'logo.jpg';
-      const match = /\.(\w+)$/.exec(filename);
-      const type = match ? `image/${match[1]}` : 'image/jpeg';
-
-      formData.append('logo_image', {
-        uri: logoImageUri,
-        name: filename,
-        type,
-      } as any);
+      formData.append('logo_image', toBlob(logoImageUri, 'logo.jpg'));
     }
 
     const res = await axios.post(

@@ -243,9 +243,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: AppColors.textDark,
+    fontSize: 19,
+    fontWeight: '800',
+    color: AppColors.primary,
   },
   tabBar: {
     flexDirection: 'row',

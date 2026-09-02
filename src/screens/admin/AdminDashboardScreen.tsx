@@ -77,11 +77,24 @@ export default function AdminDashboardScreen() {
   };
 
   const handleCardPress = (section: string) => {
-    Alert.alert(
-      section,
-      `Management controls for ${section} will be available in the upcoming Ekenox updates.`,
-      [{ text: 'OK' }]
-    );
+    switch (section) {
+      case 'User Accounts':
+        navigation.navigate('AdminUsers');
+        break;
+      case 'Verifications':
+      case 'Pending Vehicles':
+        navigation.navigate('AdminVerifications');
+        break;
+      case 'Ride Share Management':
+      case 'Car Shares':
+        navigation.navigate('AdminCarShares');
+        break;
+      case 'Eco Challenges':
+        navigation.navigate('AdminChallenges');
+        break;
+      default:
+        Alert.alert(section, `Management controls for ${section} are running active.`);
+    }
   };
 
   const getHealthColor = (status?: string) => {
@@ -233,25 +246,25 @@ export default function AdminDashboardScreen() {
         {/* ── Management Section ── */}
         <Text style={styles.sectionTitle}>Management</Text>
         <View style={styles.managementGrid}>
-          <TouchableOpacity style={styles.manageCard} onPress={() => handleCardPress('System Settings')}>
-            <View style={[styles.manageIconBg, { backgroundColor: '#EEF2F6' }]}>
-              <Ionicons name="settings-outline" size={24} color="#475569" />
+          <TouchableOpacity style={styles.manageCard} onPress={() => handleCardPress('Verifications')}>
+            <View style={[styles.manageIconBg, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="shield-checkmark-outline" size={24} color="#059669" />
             </View>
-            <Text style={styles.manageLabel}>System</Text>
+            <Text style={styles.manageLabel}>Verifications</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.manageCard} onPress={() => handleCardPress('Analytics')}>
-            <View style={[styles.manageIconBg, { backgroundColor: '#F0FDFA' }]}>
-              <Ionicons name="bar-chart-outline" size={24} color="#0D9488" />
+          <TouchableOpacity style={styles.manageCard} onPress={() => handleCardPress('User Accounts')}>
+            <View style={[styles.manageIconBg, { backgroundColor: '#EFF6FF' }]}>
+              <Ionicons name="people-outline" size={24} color="#3B82F6" />
             </View>
-            <Text style={styles.manageLabel}>Analytics</Text>
+            <Text style={styles.manageLabel}>Users</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.manageCard} onPress={() => handleCardPress('Eco Challenges')}>
             <View style={[styles.manageIconBg, { backgroundColor: '#F0FDF4' }]}>
               <Ionicons name="leaf-outline" size={24} color="#15803D" />
             </View>
-            <Text style={styles.manageLabel}>Eco Challenges</Text>
+            <Text style={styles.manageLabel}>Challenges</Text>
           </TouchableOpacity>
         </View>
 

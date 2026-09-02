@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -23,6 +23,7 @@ import { AppColors } from '../theme/colors';
 import { storyService } from '../services/storyService';
 import feedService from '../services/feedService';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useSafeVideoPlayer } from '../hooks/useSafeVideoPlayer';
 import { useEvent } from 'expo';
 
 const { width } = Dimensions.get('window');
@@ -143,24 +144,27 @@ export default function CreateStoryScreen() {
   const [selectedCutIndex, setSelectedCutIndex] = useState(0);
 
   // Players
-  const musicPreviewPlayer = useVideoPlayer(null, (p) => {
-    p.loop = false;
+  const musicPreviewPlayer = useSafeVideoPlayer(null, (p) => {
+    if (p) p.loop = false;
   });
-  const trimPreviewPlayer = useVideoPlayer(null, (p) => {
-    p.loop = true;
+  const trimPreviewPlayer = useSafeVideoPlayer(null, (p) => {
+    if (p) p.loop = true;
   });
 
-  const { currentTime } = useEvent(trimPreviewPlayer, 'timeUpdate', { currentTime: trimPreviewPlayer.currentTime } as any) as any;
+  const dummyObj = useRef({ currentTime: 0 }).current;
+  const targetTrimPlayer = trimPreviewPlayer || (dummyObj as any);
+
+  const { currentTime } = useEvent(targetTrimPlayer, 'timeUpdate', { currentTime: targetTrimPlayer.currentTime } as any) as any;
 
   useEffect(() => {
-    if (trimModalVisible && trimmingMedia) {
+    if (trimModalVisible && trimmingMedia && trimPreviewPlayer) {
       const cuts = getAiCuts(trimmingMedia.duration);
       const activeCut = cuts[selectedCutIndex];
       if (activeCut && currentTime >= activeCut.end) {
         trimPreviewPlayer.currentTime = activeCut.start;
       }
     }
-  }, [currentTime, selectedCutIndex, trimModalVisible, trimmingMedia]);
+  }, [currentTime, selectedCutIndex, trimModalVisible, trimmingMedia, trimPreviewPlayer]);
 
   // Media state
   const [singleMedia, setSingleMedia] = useState<SlideDraft | null>(null);
@@ -230,7 +234,6 @@ export default function CreateStoryScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images', 'videos'],
-        allowsEditing: true,
         quality: 0.9,
       });
 
@@ -269,7 +272,6 @@ export default function CreateStoryScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images', 'videos'],
-        allowsEditing: true,
         quality: 0.9,
       });
 
@@ -321,12 +323,12 @@ export default function CreateStoryScreen() {
 
     setTrimModalVisible(false);
     setTrimmingMedia(null);
-    trimPreviewPlayer.pause();
+    trimPreviewPlayer?.pause();
   };
 
   // Sync player source on trim modal open
   useEffect(() => {
-    if (trimModalVisible && trimmingMedia) {
+    if (trimModalVisible && trimmingMedia && trimPreviewPlayer) {
       trimPreviewPlayer.replaceAsync(trimmingMedia.uri).then(() => {
         const cuts = getAiCuts(trimmingMedia.duration);
         const cut = cuts[selectedCutIndex] || { start: 0 };
@@ -334,7 +336,7 @@ export default function CreateStoryScreen() {
         trimPreviewPlayer.play();
       });
     }
-  }, [trimModalVisible, trimmingMedia]);
+  }, [trimModalVisible, trimmingMedia, trimPreviewPlayer]);
 
   // Remove slide from carousel
   const handleRemoveSlide = (index: number) => {
@@ -837,11 +839,11 @@ export default function CreateStoryScreen() {
 
                   const togglePreviewTrack = () => {
                     if (previewingTrackId === track.id) {
-                      musicPreviewPlayer.pause();
+                      musicPreviewPlayer?.pause();
                       setPreviewingTrackId(null);
                     } else {
-                      musicPreviewPlayer.replaceAsync(track.url).then(() => {
-                        musicPreviewPlayer.play();
+                      musicPreviewPlayer?.replaceAsync(track.url).then(() => {
+                        musicPreviewPlayer?.play();
                         setPreviewingTrackId(track.id);
                       });
                     }
@@ -854,7 +856,7 @@ export default function CreateStoryScreen() {
                         onPress={() => {
                           setSelectedMusic(track.title);
                           setShowMusicList(false);
-                          musicPreviewPlayer.pause();
+                          musicPreviewPlayer?.pause();
                           setPreviewingTrackId(null);
                         }}
                       >
@@ -1070,7 +1072,7 @@ export default function CreateStoryScreen() {
           onRequestClose={() => {
             setTrimModalVisible(false);
             setTrimmingMedia(null);
-            trimPreviewPlayer.pause();
+            trimPreviewPlayer?.pause();
           }}
         >
           <View style={styles.trimModalOverlay}>
@@ -1084,7 +1086,7 @@ export default function CreateStoryScreen() {
                   onPress={() => {
                     setTrimModalVisible(false);
                     setTrimmingMedia(null);
-                    trimPreviewPlayer.pause();
+                    trimPreviewPlayer?.pause();
                   }}
                 >
                   <Ionicons name="close" size={24} color={AppColors.textDark} />
@@ -1120,8 +1122,8 @@ export default function CreateStoryScreen() {
                       style={[styles.cutItem, isSelected && styles.cutItemActive]}
                       onPress={() => {
                         setSelectedCutIndex(idx);
-                        (trimPreviewPlayer as any).seekTo(cut.start);
-                        trimPreviewPlayer.play();
+                        (trimPreviewPlayer as any)?.seekTo(cut.start);
+                        trimPreviewPlayer?.play();
                       }}
                     >
                       <View style={{ flex: 1 }}>

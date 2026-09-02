@@ -4,7 +4,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   ScrollView,
   Image,
@@ -26,15 +25,22 @@ import { useAuth } from '../context/AuthContext';
 import { AppColors } from '../theme/colors';
 import { ApiConfig } from '../config/api';
 import feedService, { Feed, Group, Event } from '../services/feedService';
-import { useNavigation } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import chatService from '../services/chatService';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useSafeVideoPlayer } from '../hooks/useSafeVideoPlayer';
 import { useEventListener, useEvent } from 'expo';
 import { UrlHelper } from '../utils/urlHelper';
-import { CommentsScreen } from './CommentsScreen';
 import { FeedPollWidget } from './FeedPollWidget';
+import associationService from '../services/associationService';
+import collaborationService from '../services/collaborationService';
+import { CustomActionSheetModal, ActionSheetOption } from '../components/CustomActionSheetModal';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// Feed media preview height (~65% of the screen, like a 65vh layout)
+const FEED_MEDIA_HEIGHT = SCREEN_HEIGHT * 0.65;
 
 const MUSIC_LIBRARY = [
   { id: '1', title: 'Nature Whispers', singer: 'Green Harmony', url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
@@ -70,46 +76,56 @@ const PostVideoPlayer = ({
   style,
   shouldPlay,
   isMuted,
-  onToggleMute
+  onToggleMute,
+  onFullscreen
 }: {
   videoUrl: string;
   style: any;
   shouldPlay: boolean;
   isMuted: boolean;
   onToggleMute: () => void;
+  onFullscreen?: () => void;
 }) => {
-  const player = useVideoPlayer(videoUrl, p => {
+  const player = useSafeVideoPlayer(videoUrl, p => {
     p.loop = true;
     p.muted = isMuted;
   });
 
-  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing }) as any;
-  const { currentTime } = useEvent(player, 'timeUpdate', { currentTime: player.currentTime } as any) as any;
-  const { muted: isVideoMuted } = useEvent(player, 'mutedChange', { muted: player.muted }) as any;
-  const { volume: currentVolume } = useEvent(player, 'volumeChange', { volume: player.volume }) as any;
+  const dummyObj = useRef({ playing: false, currentTime: 0, muted: isMuted, volume: 1 }).current;
+  const targetPlayer = player || (dummyObj as any);
 
-  const [showControls, setShowControls] = useState(true);
-  const controlsTimeoutRef = useRef<any>(null);
+  const { isPlaying } = useEvent(targetPlayer, 'playingChange', { isPlaying: targetPlayer.playing }) as any;
+  const { currentTime } = useEvent(targetPlayer, 'timeUpdate', { currentTime: targetPlayer.currentTime } as any) as any;
+  const { muted: isVideoMuted } = useEvent(targetPlayer, 'mutedChange', { muted: targetPlayer.muted }) as any;
+  const { volume: currentVolume } = useEvent(targetPlayer, 'volumeChange', { volume: targetPlayer.volume }) as any;
 
-  const resetControlsTimeout = useCallback(() => {
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current);
-    }
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
     if (isPlaying) {
-      controlsTimeoutRef.current = setTimeout(() => {
-        setShowControls(false);
-      }, 3000);
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 0.3,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulse.start();
+      return () => pulse.stop();
+    } else {
+      pulseAnim.setValue(1);
     }
   }, [isPlaying]);
 
   useEffect(() => {
-    resetControlsTimeout();
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    };
-  }, [isPlaying, resetControlsTimeout]);
-
-  useEffect(() => {
+    if (!player) return;
     if (shouldPlay) {
       player.play();
     } else {
@@ -119,62 +135,57 @@ const PostVideoPlayer = ({
 
   // Sync mute state from props
   useEffect(() => {
+    if (!player) return;
     player.muted = isMuted;
   }, [isMuted, player]);
 
   const togglePlay = () => {
+    if (!player) return;
     if (isPlaying) {
       player.pause();
     } else {
       player.play();
     }
-    setShowControls(true);
-    resetControlsTimeout();
-  };
-
-  const stopVideo = () => {
-    player.pause();
-    (player as any).seekTo(0);
-    setShowControls(true);
-    resetControlsTimeout();
-  };
-
-  const seekBackward = () => {
-    player.seekBy(-10);
-    setShowControls(true);
-    resetControlsTimeout();
-  };
-
-  const seekForward = () => {
-    player.seekBy(10);
-    setShowControls(true);
-    resetControlsTimeout();
-  };
-
-  const increaseVolume = () => {
-    const newVolume = Math.min(1.0, player.volume + 0.1);
-    player.volume = newVolume;
-    if (player.muted && newVolume > 0) {
-      player.muted = false;
-    }
-    setShowControls(true);
-    resetControlsTimeout();
-  };
-
-  const decreaseVolume = () => {
-    const newVolume = Math.max(0.0, player.volume - 0.1);
-    player.volume = newVolume;
-    if (player.muted && newVolume > 0) {
-      player.muted = false;
-    }
-    setShowControls(true);
-    resetControlsTimeout();
   };
 
   const toggleLocalMute = () => {
-    player.muted = !player.muted;
-    setShowControls(true);
-    resetControlsTimeout();
+    onToggleMute();
+  };
+
+  const showSpeedOptions = () => {
+    Alert.alert(
+      'Playback Speed',
+      'Select speed:',
+      [
+        { text: '0.75x', onPress: () => { if (player) player.playbackRate = 0.75; } },
+        { text: 'Normal (1.0x)', onPress: () => { if (player) player.playbackRate = 1.0; } },
+        { text: '1.25x', onPress: () => { if (player) player.playbackRate = 1.25; } },
+        { text: '1.5x', onPress: () => { if (player) player.playbackRate = 1.5; } },
+        { text: '2.0x', onPress: () => { if (player) player.playbackRate = 2.0; } },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+  };
+
+  const handleSettingsPress = () => {
+    Alert.alert(
+      'Video Settings',
+      'Adjust playback settings:',
+      [
+        {
+          text: `Playback Speed (Current: ${player?.playbackRate || 1}x)`,
+          onPress: showSpeedOptions
+        },
+        {
+          text: isMuted ? 'Unmute Video' : 'Mute Video',
+          onPress: onToggleMute
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        }
+      ]
+    );
   };
 
   const formatTime = (seconds: number) => {
@@ -184,19 +195,19 @@ const PostVideoPlayer = ({
     return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  const duration = player.duration || 0;
+  const duration = player?.duration || 0;
   const [progressBarWidth, setProgressBarWidth] = useState(0);
 
   const handleProgressBarTouch = (e: any) => {
-    if (progressBarWidth > 0 && duration > 0) {
+    if (progressBarWidth > 0 && duration > 0 && player) {
       const clickX = e.nativeEvent.locationX;
-      const percentage = clickX / progressBarWidth;
-      (player as any).seekTo(percentage * duration);
+      const percentage = Math.max(0, Math.min(1, clickX / progressBarWidth));
+      player.currentTime = percentage * duration;
     }
   };
 
   return (
-    <View style={style}>
+    <View style={[style, { position: 'relative' }]}>
       <VideoView
         player={player}
         style={StyleSheet.absoluteFill}
@@ -204,96 +215,216 @@ const PostVideoPlayer = ({
         nativeControls={false}
       />
 
-      {/* Tap Overlay to show/hide controls */}
+      {/* Tap Overlay to play/pause */}
       <TouchableOpacity
         activeOpacity={1}
-        onPress={() => setShowControls(!showControls)}
+        onPress={togglePlay}
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Modern Controls Overlay */}
-      {showControls && (
-        <View style={styles.controlsContainer}>
-          {/* Big Center Play/Pause Indicator */}
-          <View style={styles.centerPlayContainer}>
-            <TouchableOpacity onPress={togglePlay}>
-              <Ionicons
-                name={isPlaying ? "pause-circle" : "play-circle"}
-                size={64}
-                color="rgba(255,255,255,0.9)"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* Bottom Controls Panel */}
-          <View style={styles.controlsPanel}>
-            {/* 1. Progress Bar */}
-            <View
-              style={styles.progressBarWrapper}
-              onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width)}
-              onTouchStart={handleProgressBarTouch}
-            >
-              <View style={styles.progressBarTrack}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    { width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }
-                  ]}
-                />
-              </View>
-            </View>
-
-            {/* 2. Controls Buttons Row */}
-            <View style={styles.controlsRow}>
-              {/* Left group: Play/Pause, Stop */}
-              <View style={styles.controlsGroup}>
-                <TouchableOpacity style={styles.controlBtn} onPress={togglePlay}>
-                  <Ionicons name={isPlaying ? "pause" : "play"} size={20} color="white" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.controlBtn} onPress={stopVideo}>
-                  <Ionicons name="square" size={16} color="white" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Center group: Seek -10s, Time, Seek +10s */}
-              <View style={styles.controlsGroup}>
-                <TouchableOpacity style={styles.controlBtn} onPress={seekBackward}>
-                  <Ionicons name="play-back" size={18} color="white" />
-                </TouchableOpacity>
-                <Text style={styles.timeText}>
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </Text>
-                <TouchableOpacity style={styles.controlBtn} onPress={seekForward}>
-                  <Ionicons name="play-forward" size={18} color="white" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Right group: Volume Icon, Volume Down, Volume Up */}
-              <View style={styles.controlsGroup}>
-                <TouchableOpacity style={styles.controlBtn} onPress={toggleLocalMute}>
-                  <Ionicons
-                    name={isVideoMuted || currentVolume === 0 ? "volume-mute" : currentVolume < 0.5 ? "volume-low" : "volume-high"}
-                    size={20}
-                    color="white"
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.controlBtn} onPress={decreaseVolume}>
-                  <Ionicons name="remove" size={16} color="white" />
-                </TouchableOpacity>
-                <Text style={styles.volumePercentText}>
-                  {isVideoMuted ? '0%' : `${Math.round(currentVolume * 100)}%`}
-                </Text>
-                <TouchableOpacity style={styles.controlBtn} onPress={increaseVolume}>
-                  <Ionicons name="add" size={16} color="white" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
+      {/* Pulse green playing badge */}
+      {isPlaying && (
+        <View style={styles.playingBadge}>
+          <Animated.View style={[styles.playingDot, { opacity: pulseAnim }]} />
+          <Text style={styles.playingText}>PLAYING</Text>
         </View>
       )}
+
+      {/* Settings gear icon when playing */}
+      {isPlaying && (
+        <TouchableOpacity style={styles.videoSettingsBtn} activeOpacity={0.7} onPress={handleSettingsPress}>
+          <Ionicons name="settings-sharp" size={18} color="white" />
+        </TouchableOpacity>
+      )}
+
+      {/* Translucent center play overlay circle when paused */}
+      {!isPlaying && (
+        <View style={styles.pausedCenterOverlay}>
+          <TouchableOpacity
+            style={styles.pausedCenterClickArea}
+            onPress={togglePlay}
+            activeOpacity={1}
+          >
+            <View style={styles.pausedPlayCircle}>
+              <Ionicons name="play" size={28} color="white" style={{ marginLeft: 3 }} />
+            </View>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Bottom controls panel */}
+      <View style={styles.videoBottomPanel}>
+        <View style={styles.videoBottomInfoRow}>
+          <Text style={styles.videoTimeText}>
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </Text>
+          <View style={styles.videoRightIcons}>
+            <TouchableOpacity onPress={toggleLocalMute} style={styles.videoIconBtn}>
+              <Ionicons
+                name={isVideoMuted || currentVolume === 0 ? "volume-mute" : currentVolume < 0.5 ? "volume-low" : "volume-high"}
+                size={20}
+                color="white"
+              />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onFullscreen} style={styles.videoIconBtn}>
+              <Ionicons name="expand" size={18} color="white" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Custom Progress Bar */}
+        <View
+          style={styles.progressBarWrapper}
+          onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width)}
+          onTouchStart={handleProgressBarTouch}
+          onTouchMove={handleProgressBarTouch}
+        >
+          <View style={styles.progressBarTrack}>
+            <View
+              style={[
+                styles.progressBarFill,
+                { width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }
+              ]}
+            />
+            <View
+              style={[
+                styles.progressBarThumb,
+                { left: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }
+              ]}
+            />
+          </View>
+        </View>
+      </View>
     </View>
   );
 };
+
+
+// Fullscreen media carousel viewer — same UX as the Profile screen gallery:
+// tap an item to open, swipe between slides, videos play in-line, images are
+// shown in full with "contain" so nothing gets cropped.
+const FeedMediaCarouselViewer = ({
+  visible,
+  items,
+  startIndex,
+  onClose,
+}: {
+  visible: boolean;
+  items: { url: string; type: 'image' | 'video' }[];
+  startIndex: number;
+  onClose: () => void;
+}) => {
+  const insets = useSafeAreaInsets();
+  const [currentIndex, setCurrentIndex] = useState(startIndex);
+  const flatRef = useRef<FlatList<any>>(null);
+
+  useEffect(() => {
+    setCurrentIndex(startIndex);
+    if (flatRef.current && visible) {
+      setTimeout(() => {
+        flatRef.current?.scrollToIndex({ index: startIndex, animated: false });
+      }, 80);
+    }
+  }, [startIndex, visible]);
+
+  const onMomentumScrollEnd = (e: any) => {
+    const newIndex = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    setCurrentIndex(newIndex);
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent={false} onRequestClose={onClose} statusBarTranslucent>
+      <View style={styles.feedMediaViewerOverlay}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+        {/* Header */}
+        <View style={[styles.feedMediaViewerHeader, { paddingTop: insets.top + 10 }]}>
+          <TouchableOpacity onPress={onClose} style={styles.feedMediaViewerClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="close" size={26} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.feedMediaViewerCounter}>{currentIndex + 1} / {items.length}</Text>
+          <View style={{ width: 34 }} />
+        </View>
+
+        {/* Swipeable slides */}
+        <FlatList
+          ref={flatRef}
+          data={items}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          initialScrollIndex={startIndex}
+          getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+          onMomentumScrollEnd={onMomentumScrollEnd}
+          keyExtractor={(_, i) => String(i)}
+          renderItem={({ item, index }) => (
+            <FeedMediaCarouselSlide item={item} isActive={index === currentIndex} />
+          )}
+        />
+
+        {/* Dots indicator */}
+        {items.length > 1 && (
+          <View style={[styles.feedMediaDotsRow, { paddingBottom: insets.bottom + 16 }]}>
+            {items.map((_, i) => (
+              <View key={i} style={[styles.feedMediaDot, i === currentIndex && styles.feedMediaDotActive]} />
+            ))}
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+};
+
+function FeedMediaCarouselSlide({ item, isActive }: { item: { url: string; type: 'image' | 'video' }; isActive: boolean }) {
+  const player = useSafeVideoPlayer(item.type === 'video' ? item.url : null, p => {
+    if (p) {
+      p.loop = false;
+      p.muted = false;
+    }
+  });
+
+  const dummyObj = useRef({ playing: false }).current;
+  const targetPlayer = player || (dummyObj as any);
+  const { isPlaying } = useEvent(targetPlayer, 'playingChange', { isPlaying: targetPlayer.playing }) as any;
+
+  useEffect(() => {
+    if (!player) return;
+    if (isActive) player.play();
+    else player.pause();
+  }, [isActive, player]);
+
+  if (item.type === 'video') {
+    return (
+      <View style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+        {player ? (
+          <VideoView
+            player={player}
+            style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT * 0.85 }}
+            contentFit="contain"
+            nativeControls={true}
+          />
+        ) : (
+          <ActivityIndicator color="white" size="large" />
+        )}
+        {!isPlaying && isActive && (
+          <View pointerEvents="none">
+            <Ionicons name="play-circle" size={64} color="rgba(255,255,255,0.8)" />
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+      <Image
+        source={{ uri: item.url }}
+        style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT * 0.85 }}
+        resizeMode="contain"
+      />
+    </View>
+  );
+}
 
 
 export const FeedScreen = () => {
@@ -305,15 +436,17 @@ export const FeedScreen = () => {
   const [posts, setPosts] = useState<Feed[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
+  const [groupSearchQuery, setGroupSearchQuery] = useState('');
 
   // Feed pagination state
   const [feedPage, setFeedPage] = useState(1);
   const [hasMoreFeeds, setHasMoreFeeds] = useState(true);
   const [loadingMoreFeeds, setLoadingMoreFeeds] = useState(false);
+  const [showFab, setShowFab] = useState(false);
 
   // Background music player
-  const bgMusicPlayer = useVideoPlayer(null, (p) => {
-    p.loop = true;
+  const bgMusicPlayer = useSafeVideoPlayer(null, (p) => {
+    if (p) p.loop = true;
   });
 
   // Dynamic Tip of the Day State
@@ -325,6 +458,24 @@ export const FeedScreen = () => {
   const [activePostId, setActivePostId] = useState<string | null>(null);
   const [isFeedMuted, setIsFeedMuted] = useState(true);
 
+  // Fullscreen media viewer (like the Profile screen gallery)
+  const [feedMediaViewerVisible, setFeedMediaViewerVisible] = useState(false);
+  const [feedMediaViewerItems, setFeedMediaViewerItems] = useState<{ url: string; type: 'image' | 'video' }[]>([]);
+  const [feedMediaViewerIndex, setFeedMediaViewerIndex] = useState(0);
+
+  const openFeedMedia = (post: Feed, startIndex = 0) => {
+    const media = (post.media || []) as any[];
+    if (!media.length) return;
+    setFeedMediaViewerItems(
+      media.map(m => ({
+        url: resolveMediaUrl(m.url),
+        type: m.type === 'video' || isVideoUrl(m.url) ? 'video' : 'image',
+      }))
+    );
+    setFeedMediaViewerIndex(startIndex);
+    setFeedMediaViewerVisible(true);
+  };
+
   const loadMoreFeeds = async () => {
     if (loadingMoreFeeds || !hasMoreFeeds) return;
     setLoadingMoreFeeds(true);
@@ -332,7 +483,11 @@ export const FeedScreen = () => {
       const nextPage = feedPage + 1;
       const newFeeds = await feedService.getFeeds(nextPage, 10);
       if (newFeeds && newFeeds.length > 0) {
-        setPosts(prev => [...prev, ...newFeeds]);
+        setPosts(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueNewFeeds = newFeeds.filter(p => !existingIds.has(p.id));
+          return [...prev, ...uniqueNewFeeds];
+        });
         setFeedPage(nextPage);
         setHasMoreFeeds(newFeeds.length === 10);
       } else {
@@ -348,6 +503,10 @@ export const FeedScreen = () => {
   const handleScroll = (event: any) => {
     const scrollOffset = event.nativeEvent.contentOffset.y;
     scrollY.setValue(scrollOffset);
+
+    // Toggle FAB visibility based on scroll
+    setShowFab(scrollOffset > 150);
+
     const contentHeight = event.nativeEvent.contentSize.height;
     const layoutHeight = event.nativeEvent.layoutMeasurement.height;
 
@@ -412,8 +571,8 @@ export const FeedScreen = () => {
   const [storyLikesLoading, setStoryLikesLoading] = useState(false);
   const [storySharesLoading, setStorySharesLoading] = useState(false);
 
-  const player = useVideoPlayer(null, (p) => {
-    p.loop = false;
+  const player = useSafeVideoPlayer(null, (p) => {
+    if (p) p.loop = false;
   });
 
   // Group Explorer Tab State ('public' | 'user' | 'discover')
@@ -424,13 +583,10 @@ export const FeedScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<string | number | null>(null);
 
-  // Comments Modal State
-  const [commentsModalVisible, setCommentsModalVisible] = useState(false);
-  const [commentsPostId, setCommentsPostId] = useState<string | number | null>(null);
-  const [commentsPostCount, setCommentsPostCount] = useState(0);
-
-  // Unread Notification Count State
+  // Unread Notification & Chat & Collaboration Count State
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [pendingCollabCount, setPendingCollabCount] = useState(0);
 
   // Custom Edit Post Modal State
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -438,9 +594,22 @@ export const FeedScreen = () => {
   const [editingTextState, setEditingTextState] = useState('');
   const [editSubmitting, setEditSubmitting] = useState(false);
 
+  // Custom Action Sheet Modal State
+  const [actionSheetConfig, setActionSheetConfig] = useState<{
+    visible: boolean;
+    title: string;
+    subtitle?: string;
+    options: ActionSheetOption[];
+  }>({
+    visible: false,
+    title: 'Select an Action',
+    options: [],
+  });
+
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  const HEADER_HEIGHT = 60 + insets.top;
+  const BRAND_BAR_HEIGHT = 0; // Brand bar removed; kept as 0 for scroll offset compat
+  const HEADER_HEIGHT = 60 + BRAND_BAR_HEIGHT + insets.top;
   const headerTranslateY = Animated.diffClamp(scrollY, 0, HEADER_HEIGHT).interpolate({
     inputRange: [0, HEADER_HEIGHT],
     outputRange: [0, -HEADER_HEIGHT],
@@ -480,7 +649,11 @@ export const FeedScreen = () => {
       try {
         const list = await feedService.getStoryList(page, 6);
         if (list.length > 0) {
-          setStories(prev => [...prev, ...list]);
+          setStories(prev => {
+            const existingIds = new Set(prev.map(s => s.id));
+            const uniqueNewStories = list.filter(s => !existingIds.has(s.id));
+            return [...prev, ...uniqueNewStories];
+          });
           setStoryPage(page);
           setHasMoreStories(list.length === 6);
         } else {
@@ -520,9 +693,13 @@ export const FeedScreen = () => {
       // 5. Fetch Groups based on current filter
       await fetchGroupsData(groupActiveTab);
 
-      // 6. Fetch Unread Notifications Count
+      // 6. Fetch Unread Notifications, Chat Count & Pending Collaboration Count
       const count = await feedService.getUnreadNotificationsCount();
       setUnreadNotifCount(count);
+      const chatCount = await chatService.getTotalUnreadCount();
+      setUnreadChatCount(chatCount);
+      const collabSummary = await collaborationService.getSummary().catch(() => null);
+      setPendingCollabCount(collabSummary?.pending_received || 0);
 
     } catch (error) {
       console.error('❌ Failed to fetch feed/groups/events data:', error);
@@ -545,6 +722,10 @@ export const FeedScreen = () => {
     try {
       const count = await feedService.getUnreadNotificationsCount();
       setUnreadNotifCount(count);
+      const chatCount = await chatService.getTotalUnreadCount();
+      setUnreadChatCount(chatCount);
+      const collabSummary = await collaborationService.getSummary().catch(() => null);
+      setPendingCollabCount(collabSummary?.pending_received || 0);
     } catch (err) {
       console.warn('Failed to load unread count:', err);
     }
@@ -553,6 +734,14 @@ export const FeedScreen = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnreadCount();
+      const interval = setInterval(fetchUnreadCount, 8000);
+      return () => clearInterval(interval);
+    }, [fetchUnreadCount])
+  );
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
@@ -595,12 +784,14 @@ export const FeedScreen = () => {
   const handleLikePost = async (postId: string | number) => {
     setPosts(prevPosts =>
       prevPosts.map(post => {
-        if (post.id === postId) {
+        if (post && post.id === postId) {
           const newIsLiked = !post.is_liked;
+          const currentCount = post.likes_count ?? post.stats?.reactions ?? 0;
           return {
             ...post,
             is_liked: newIsLiked,
-            likes_count: newIsLiked ? post.likes_count + 1 : Math.max(0, post.likes_count - 1),
+            user_reacted: newIsLiked,
+            likes_count: newIsLiked ? currentCount + 1 : Math.max(0, currentCount - 1),
           };
         }
         return post;
@@ -608,14 +799,15 @@ export const FeedScreen = () => {
     );
 
     const result = await feedService.toggleReaction(postId);
-    if (result.success) {
+    if (result && result.success) {
       setPosts(prevPosts =>
         prevPosts.map(post => {
-          if (post.id === postId) {
+          if (post && post.id === postId) {
             return {
               ...post,
               is_liked: result.isLiked,
-              likes_count: result.likesCount,
+              user_reacted: result.isLiked,
+              likes_count: result.likesCount ?? post.likes_count,
             };
           }
           return post;
@@ -703,6 +895,11 @@ export const FeedScreen = () => {
     }
   };
 
+  // Open comments as a full page
+  const handleOpenComments = (postId: string | number, count: number, feedAuthorId?: string | number) => {
+    navigation.navigate('Comments', { feedId: postId, commentsCount: count, feedAuthorId });
+  };
+
   // Delete feed post
   const handleDeletePost = (postId: string | number) => {
     Alert.alert('Delete Post', 'Are you sure you want to delete this post permanently?', [
@@ -754,18 +951,21 @@ export const FeedScreen = () => {
   // Report feed post
   const handleReportPost = (postId: string | number) => {
     const reasons = [
-      { text: 'Spam or unwanted', reason: 'spam' },
-      { text: 'Harassment or abuse', reason: 'harassment' },
-      { text: 'Inappropriate content', reason: 'inappropriate' },
-      { text: 'Illegal content', reason: 'illigal_content' },
-      { text: 'Other reason', reason: 'other' },
+      { text: 'Spam or unwanted promotion', reason: 'spam', icon: 'mail-unread-outline' as const },
+      { text: 'Harassment, bullying or abuse', reason: 'harassment', icon: 'hand-left-outline' as const },
+      { text: 'Inappropriate or offensive content', reason: 'inappropriate', icon: 'warning-outline' as const },
+      { text: 'Illegal content or counterfeit', reason: 'illigal_content', icon: 'shield-outline' as const },
+      { text: 'Other violation', reason: 'other', icon: 'alert-circle-outline' as const },
     ];
 
-    Alert.alert(
-      'Report Post',
-      'Select a reason for reporting this post:',
-      reasons.map(r => ({
-        text: r.text,
+    setActionSheetConfig({
+      visible: true,
+      title: 'Report Post',
+      subtitle: 'Select a reason for reporting this post:',
+      options: reasons.map(r => ({
+        title: r.text,
+        icon: r.icon,
+        isDestructive: true,
         onPress: async () => {
           const success = await feedService.reportFeed(postId, r.reason);
           if (success) {
@@ -774,25 +974,67 @@ export const FeedScreen = () => {
             Alert.alert('Error', 'Failed to submit report.');
           }
         },
-      }))
-    );
+      })),
+    });
   };
 
   // Options Menu sheet triggers
   const handleOpenPostOptions = (post: Feed) => {
-    const isMine = (post.user?.id && String(post.user.id) === String(user?.id)) || (post.author?.id && String(post.author.id) === String(user?.id));
+    if (!post) return;
+    const authorId = post.user?.id || post.author?.id;
+    const isMine = authorId && user?.id && String(authorId) === String(user.id);
 
-    const options: any[] = [];
+    const options: ActionSheetOption[] = [];
+
+    // Copy Link
+    options.push({
+      title: 'Copy Link',
+      subtitle: 'Copy link to this post to clipboard',
+      icon: 'link-outline',
+      iconColor: '#0284C7',
+      onPress: () => handleCopyLink(post.id),
+    });
+
+    // Share
+    options.push({
+      title: 'Share Post',
+      subtitle: 'Share with friends or social apps',
+      icon: 'share-social-outline',
+      iconColor: '#059669',
+      onPress: () => handleSharePost(post),
+    });
+
     if (isMine) {
-      options.push({ text: 'Edit Post', onPress: () => handleEditPost(post) });
-      options.push({ text: 'Delete Post', style: 'destructive', onPress: () => handleDeletePost(post.id) });
+      options.push({
+        title: 'Edit Post',
+        subtitle: 'Edit post text and content',
+        icon: 'create-outline',
+        iconColor: '#D97706',
+        onPress: () => handleEditPost(post),
+      });
+      options.push({
+        title: 'Delete Post',
+        subtitle: 'Permanently remove this post',
+        icon: 'trash-outline',
+        isDestructive: true,
+        onPress: () => handleDeletePost(post.id),
+      });
     } else {
-      options.push({ text: 'Report Post', onPress: () => handleReportPost(post.id) });
+      options.push({
+        title: 'Report Post',
+        subtitle: 'Flag inappropriate content to moderators',
+        icon: 'flag-outline',
+        isDestructive: true,
+        onPress: () => handleReportPost(post.id),
+      });
     }
-    options.push({ text: 'Copy Link', onPress: () => handleCopyLink(post.id) });
-    options.push({ text: 'Cancel', style: 'cancel' });
 
-    Alert.alert('Post Options', 'Select an action:', options);
+    setActionSheetConfig({
+      visible: true,
+      title: 'Post Options',
+      subtitle: 'Select an action to perform',
+      options,
+    });
   };
 
   // Vote on poll post
@@ -872,7 +1114,7 @@ export const FeedScreen = () => {
 
   const closeStories = () => {
     if (storyTimer.current) clearTimeout(storyTimer.current);
-    bgMusicPlayer.pause();
+    bgMusicPlayer?.pause();
     setStoryModalVisible(false);
     setSelectedStoryIndex(null);
     setCurrentSlideIndex(0);
@@ -1010,21 +1252,24 @@ export const FeedScreen = () => {
 
 
 
+  const dummyPlayerObj = useRef({}).current;
+  const targetStoryPlayer = player || (dummyPlayerObj as any);
+
   // Advance to next slide when video plays to the end
-  useEventListener(player, 'playToEnd', () => {
+  useEventListener(targetStoryPlayer, 'playToEnd', () => {
     handleNextSlide();
   });
 
   // Manage loading indicator state on player status changes
-  useEventListener(player, 'statusChange', ({ status }) => {
+  useEventListener(targetStoryPlayer, 'statusChange', ({ status }) => {
     setStoryVideoLoading(status === 'loading');
   });
 
   // Sync the player source dynamically with the active slide mediaUrl
   useEffect(() => {
     if (!storyModalVisible || selectedStoryIndex === null || isStoryPaused) {
-      player.pause();
-      bgMusicPlayer.pause();
+      player?.pause();
+      bgMusicPlayer?.pause();
       return;
     }
 
@@ -1045,13 +1290,13 @@ export const FeedScreen = () => {
         : null);
 
     if (musicUrl && !isMusicMuted) {
-      bgMusicPlayer.replaceAsync(resolveMediaUrl(musicUrl)).then(() => {
-        if (!isStoryPaused) bgMusicPlayer.play();
+      bgMusicPlayer?.replaceAsync(resolveMediaUrl(musicUrl)).then(() => {
+        if (!isStoryPaused) bgMusicPlayer?.play();
       });
-      player.muted = true;
+      if (player) player.muted = true;
     } else {
-      bgMusicPlayer.pause();
-      player.muted = false;
+      bgMusicPlayer?.pause();
+      if (player) player.muted = false;
     }
 
     if (isVideo) {
@@ -1066,12 +1311,12 @@ export const FeedScreen = () => {
       );
 
       if (mediaUrl) {
-        player.replaceAsync(mediaUrl).then(() => {
-          if (!isStoryPaused) player.play();
+        player?.replaceAsync(mediaUrl).then(() => {
+          if (!isStoryPaused) player?.play();
         });
       }
     } else {
-      player.pause();
+      player?.pause();
     }
   }, [storyModalVisible, selectedStoryIndex, currentSlideIndex, isMusicMuted, isStoryPaused]);
 
@@ -1140,207 +1385,337 @@ export const FeedScreen = () => {
   };
 
   const renderCreateStoryHeader = () => {
-    const userAvatar = user?.profileImage ? resolveMediaUrl(user.profileImage) : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
+    const userAvatar = user?.profileImage ? resolveMediaUrl(user.profileImage) : null;
     return (
       <TouchableOpacity
-        style={styles.storyCard}
+        style={styles.storyBubbleWrap}
         onPress={() => navigation.navigate('CreateStory')}
         activeOpacity={0.85}
       >
-        <Image source={{ uri: userAvatar }} style={[styles.storyCardBg, { height: '100%' }]} blurRadius={1} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-        
-        <View style={styles.storyCardOverlay}>
-          <Ionicons name="add" size={14} color="white" />
-        </View>
-
-        <View style={styles.createStoryCardCenter}>
-          <View style={styles.createStoryIconCircle}>
-            <Ionicons name="camera" size={16} color="white" />
+        <View style={styles.storyBubbleCircleCreate}>
+          {userAvatar ? (
+            <Image source={{ uri: userAvatar }} style={styles.storyBubbleInnerImg} blurRadius={2} />
+          ) : (
+            <View style={[styles.storyBubbleInnerImg, { backgroundColor: AppColors.primaryLight }]} />
+          )}
+          <View style={styles.storyBubblePlusBtn}>
+            <Ionicons name="add" size={16} color="white" />
           </View>
-          <Text style={styles.createStoryCardText}>
-            Add Story
-          </Text>
         </View>
+        <Text style={styles.storyBubbleTitle} numberOfLines={1}>Create Story</Text>
       </TouchableOpacity>
     );
   };
 
-  // Render Horizontal Story Cards matching Flutter design
+  // Render Horizontal Story Bubble Cards (circular, title under)
   const renderStoryItem = ({ item, index }: { item: any; index: number }) => {
-    const thumbnailUrl = item.thumbnail_url || item.thumbnailUrl || (item.slides?.[0]?.media_url || item.slides?.[0]?.mediaUrl);
-    const userAvatar = item.user?.profile_image || item.user?.avatar_url || item.userAvatar || thumbnailUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
-    const username = item.user?.full_name || item.username || 'Champion';
+    const thumbnailUrl = item.thumbnail_url || item.thumbnailUrl || item.slides?.[0]?.media_url || item.slides?.[0]?.mediaUrl;
+    const storyTitle = item.title || item.user?.full_name || item.username || 'Story';
 
     return (
-      <TouchableOpacity style={styles.storyCard} onPress={() => handleOpenStories(index)} activeOpacity={0.85}>
-        {thumbnailUrl ? (
-          <Image source={{ uri: resolveMediaUrl(thumbnailUrl) }} style={[styles.storyCardBg, { height: '100%' }]} />
-        ) : (
-          <View style={[styles.storyCardBg, { height: '100%', backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
-            <Ionicons name="play" size={24} color={AppColors.primary} />
+      <TouchableOpacity style={styles.storyBubbleWrap} onPress={() => handleOpenStories(index)} activeOpacity={0.85}>
+        {/* Gradient ring */}
+        <View style={styles.storyBubbleRing}>
+          <View style={styles.storyBubbleCircle}>
+            {thumbnailUrl ? (
+              <Image source={{ uri: resolveMediaUrl(thumbnailUrl) }} style={styles.storyBubbleInnerImg} />
+            ) : (
+              <View style={[styles.storyBubbleInnerImg, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
+                <Ionicons name="play" size={18} color={AppColors.primary} />
+              </View>
+            )}
           </View>
-        )}
-        <View style={styles.storyCardOverlay}>
-          <Ionicons name="play-outline" size={12} color="white" />
         </View>
-
-        <View style={styles.storyCardUserInfo}>
-          <Image source={{ uri: resolveMediaUrl(userAvatar) }} style={styles.storyCardAvatar} />
-          <Text style={styles.storyCardName} numberOfLines={1}>
-            {username}
-          </Text>
-        </View>
+        <Text style={styles.storyBubbleTitle} numberOfLines={1}>{storyTitle}</Text>
       </TouchableOpacity>
     );
   };
 
-  const renderPostCard = (post: Feed) => {
+  const handleToggleFollowUser = async (userId: string | number, currentFollowState: boolean, postId: string | number) => {
+    // Optimistically update all posts from this author in the list
+    setPosts(prev => prev.map(p => {
+      const authorId = p.user?.id || p.author?.id;
+      if (authorId && String(authorId) === String(userId)) {
+        return {
+          ...p,
+          is_following: !currentFollowState,
+          user: p.user ? { ...p.user, is_following: !currentFollowState } : p.user
+        };
+      }
+      return p;
+    }));
+
+    try {
+      if (currentFollowState) {
+        await associationService.unfollowUser(userId);
+      } else {
+        await associationService.followUser(userId);
+      }
+    } catch (err) {
+      console.error('Failed to toggle follow status:', err);
+      // Rollback on error
+      setPosts(prev => prev.map(p => {
+        const authorId = p.user?.id || p.author?.id;
+        if (authorId && String(authorId) === String(userId)) {
+          return {
+            ...p,
+            is_following: currentFollowState,
+            user: p.user ? { ...p.user, is_following: currentFollowState } : p.user
+          };
+        }
+        return p;
+      }));
+      Alert.alert('Error', 'Failed to update follow status. Please try again.');
+    }
+  };
+
+  const renderPostCard = (post: any) => {
     const authorName = post.user?.full_name || post.author?.full_name || 'Anonymous';
     const authorImage = post.user?.profile_image || post.user?.avatar_url || post.author?.profile_image;
     const isLiked = post.is_liked || post.user_reacted;
     const reactions = post.stats?.reactions ?? post.likes_count ?? 0;
     const comments = post.stats?.comments ?? post.comments_count ?? 0;
+    const shares = post.stats?.shares ?? post.shares_count ?? 0;
     const hasMedia = post.media && post.media.length > 0;
+    const postMedia = (post.media || []) as any[];
+
+    // Author tagline / bio
+    const authorTagline = post.user?.bio || post.user?.tagline || post.user?.profession || '';
+
+    // Relative time
+    const getRelTime = (dt: string) => {
+      try {
+        const diff = (Date.now() - new Date(dt).getTime()) / 1000;
+        if (diff < 60) return 'now';
+        if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+        return `${Math.floor(diff / 86400)}d`;
+      } catch { return ''; }
+    };
+    const relTime = post.created_at ? getRelTime(post.created_at) : '';
+    const subtitle = [authorTagline, relTime].filter(Boolean).join(' • ');
+
+    // Render post content with inline hashtags highlighted in green
+    const renderPostContentText = (text: string) => {
+      if (!text) return null;
+      const parts = text.split(/(\s|#[\w\u00C0-\u017F]+)/g);
+      return (
+        <Text style={styles.postContent}>
+          {parts.map((part, index) => {
+            if (part.startsWith('#')) {
+              return (
+                <Text key={index} style={{ color: '#006d40', fontWeight: '700' }}>
+                  {part}
+                </Text>
+              );
+            }
+            return part;
+          })}
+        </Text>
+      );
+    };
 
     return (
       <View
         key={post.id}
-        style={[styles.postCard, hasMedia ? { minHeight: CARD_HEIGHT } : null]}
+        style={styles.postCard}
         onLayout={event => {
           const { y, height } = event.nativeEvent.layout;
           postLayouts.current[post.id.toString()] = { y: y + postsListY.current, height };
         }}
       >
-        {/* Author details */}
-        <View style={[styles.postAuthorRow, { paddingHorizontal: 16 }]}>
-          {authorImage ? (
-            <Image source={{ uri: resolveMediaUrl(authorImage) }} style={styles.postAvatar} />
-          ) : (
-            <View style={[styles.postAvatar, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
-              <Text style={{ color: AppColors.primary, fontWeight: 'bold', fontSize: 13 }}>
-                {authorName.substring(0, 2).toUpperCase()}
+        {/* Challenge banner */}
+        {post.post_type === 'challenge' && post.challenge && (
+          <TouchableOpacity
+            style={styles.postBannerChallenge}
+            onPress={() => navigation.navigate('ChallengeDetail', { challengeId: post.challenge.id })}
+          >
+            <View style={styles.postBannerIconWrap}>
+              <Ionicons name="leaf" size={14} color="#4CAF50" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.postBannerLabel}>Eco Challenge Progress</Text>
+              <Text style={styles.postBannerTitle} numberOfLines={1}>{post.challenge.title}</Text>
+            </View>
+            <View style={styles.postBannerLvlBadge}>
+              <Text style={styles.postBannerLvlText}>Lvl {post.challenge.level || 1}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={14} color="#4CAF50" />
+          </TouchableOpacity>
+        )}
+
+        {/* Group banner */}
+        {post.feed_group && (
+          <TouchableOpacity
+            style={styles.postBannerGroup}
+            onPress={() => navigation.navigate('GroupDetail', { groupId: post.feed_group.id })}
+          >
+            <View style={[styles.postBannerIconWrap, { backgroundColor: '#3B82F620' }]}>
+              <Ionicons name="people" size={14} color="#3B82F6" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.postBannerLabel, { color: '#3B82F6' }]}>Eco Community Group</Text>
+              <Text style={styles.postBannerTitle} numberOfLines={1}>{post.feed_group.name}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={14} color="#3B82F6" />
+          </TouchableOpacity>
+        )}
+
+        {/* Event banner */}
+        {(post.event || (post.post_type === 'event' && post.event_id)) && (
+          <TouchableOpacity
+            style={styles.postBannerEvent}
+            onPress={() => navigation.navigate('EventDetail' as never, { eventId: post.event?.id || post.event_id } as never)}
+          >
+            <View style={[styles.postBannerIconWrap, { backgroundColor: '#05966920' }]}>
+              <Ionicons name="calendar" size={14} color="#059669" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.postBannerLabel, { color: '#059669' }]}>Event Discussion & Updates</Text>
+              <Text style={styles.postBannerTitle} numberOfLines={1}>
+                {post.event?.title || 'Eco Event'}
               </Text>
             </View>
-          )}
-          <View style={styles.postAuthorDetails}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Ionicons name="chevron-forward" size={14} color="#059669" />
+          </TouchableOpacity>
+        )}
+
+        {/* Post header */}
+        <View style={styles.postHeader}>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+            onPress={() => navigation.navigate('Profile', { userId: post.user?.id })}
+            activeOpacity={0.7}
+          >
+            {authorImage ? (
+              <Image source={{ uri: resolveMediaUrl(authorImage) }} style={styles.postAvatar} />
+            ) : (
+              <View style={[styles.postAvatar, { backgroundColor: AppColors.primaryLight, justifyContent: 'center', alignItems: 'center' }]}>
+                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 14 }}>
+                  {authorName.substring(0, 1).toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <View style={styles.postAuthorDetails}>
               <Text style={styles.postAuthorName}>{authorName}</Text>
-              {post.feed_group && (
-                <TouchableOpacity
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: '#CCFAF6',
-                    paddingHorizontal: 6,
-                    paddingVertical: 2,
-                    borderRadius: 10,
-                    marginLeft: 6,
-                  }}
-                  onPress={() => navigation.navigate('GroupDetail', { groupId: post.feed_group.id })}
-                >
-                  <Ionicons name="people" size={10} color={AppColors.primary} style={{ marginRight: 3 }} />
-                  <Text style={{ fontSize: 10, color: AppColors.primary, fontWeight: '600' }} numberOfLines={1}>
-                    {post.feed_group.name}
-                  </Text>
-                </TouchableOpacity>
-              )}
+              {subtitle ? (
+                <Text style={styles.postTime} numberOfLines={1}>{subtitle}</Text>
+              ) : null}
             </View>
-            <Text style={styles.postTime}>
-              {new Date(post.created_at).toLocaleDateString()} {post.is_edited && '• Edited'}
-            </Text>
-          </View>
+          </TouchableOpacity>
+
+          {/* Follow Button */}
+          {user && post.user && String(post.user.id) !== String(user.id) && (
+            <TouchableOpacity
+              style={[styles.postFollowBtn, post.is_following && styles.postFollowingBtn]}
+              onPress={() => handleToggleFollowUser(post.user.id, post.is_following, post.id)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={post.is_following ? "checkmark-circle" : "add-circle"}
+                size={12}
+                color={post.is_following ? AppColors.textMedium : AppColors.primary}
+              />
+              <Text style={[styles.postFollowBtnText, post.is_following && styles.postFollowingBtnText]}>
+                {post.is_following ? 'Following' : 'Follow'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity style={styles.postOptionBtn} onPress={() => handleOpenPostOptions(post)}>
             <Ionicons name="ellipsis-horizontal" size={20} color={AppColors.textMedium} />
           </TouchableOpacity>
         </View>
 
-        {/* Content text */}
-        <Text style={[styles.postContent, { paddingHorizontal: 16 }]} numberOfLines={hasMedia ? 3 : undefined}>
-          {post.content}
-        </Text>
+        {/* Content text (with inline highlighted hashtags) */}
+        {!!post.content && renderPostContentText(post.content)}
 
-        {/* Multi-images / Single image slidable swiper */}
-        {hasMedia && post.media && post.media.length > 0 && (
-          <View style={{ height: SCREEN_HEIGHT * 0.55, width: '100%', marginBottom: 12 }}>
-            {post.media.length === 1 ? (
-              post.media[0].type === 'video' || isVideoUrl(post.media[0].url) ? (
+        {/* Media preview */}
+        {hasMedia && postMedia.length > 0 && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => openFeedMedia(post, 0)}
+            style={styles.postMediaWrapper}
+          >
+            {postMedia[0].type === 'video' || isVideoUrl(postMedia[0].url) ? (
+              <View style={styles.postVideoBox}>
                 <PostVideoPlayer
-                  videoUrl={resolveMediaUrl(post.media[0].url)}
-                  style={{ width: '100%', height: '100%' }}
+                  videoUrl={resolveMediaUrl(postMedia[0].url)}
+                  style={styles.postVideoSource}
                   shouldPlay={activePostId === post.id.toString()}
                   isMuted={isFeedMuted}
                   onToggleMute={() => setIsFeedMuted(!isFeedMuted)}
+                  onFullscreen={() => openFeedMedia(post, 0)}
                 />
-              ) : (
-                <Image source={{ uri: resolveMediaUrl(post.media[0].url) }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-              )
+              </View>
             ) : (
-              <View style={{ flex: 1, width: '100%', position: 'relative' }}>
-                <FlatList
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  data={post.media}
-                  keyExtractor={m => m.id.toString()}
-                  renderItem={({ item }) => (
-                    item.type === 'video' || isVideoUrl(item.url) ? (
-                      <PostVideoPlayer
-                        videoUrl={resolveMediaUrl(item.url)}
-                        style={{ width: SCREEN_WIDTH, height: '100%' }}
-                        shouldPlay={activePostId === post.id.toString()}
-                        isMuted={isFeedMuted}
-                        onToggleMute={() => setIsFeedMuted(!isFeedMuted)}
-                      />
-                    ) : (
-                      <Image source={{ uri: resolveMediaUrl(item.url) }} style={{ width: SCREEN_WIDTH, height: '100%' }} resizeMode="cover" />
-                    )
-                  )}
-                />
-                <View style={styles.carouselIndicator}>
-                  <Ionicons name="images" size={12} color="white" />
-                  <Text style={styles.carouselIndicatorText}>Swipe to view ({post.media.length})</Text>
-                </View>
+              <Image
+                source={{ uri: resolveMediaUrl(postMedia[0].url) }}
+                style={styles.postMediaImage}
+                resizeMode="cover"
+              />
+            )}
+            {/* Multiple media badge */}
+            {postMedia.length > 1 && (
+              <View style={styles.mediaCountBadge}>
+                <Ionicons name="images" size={12} color="white" />
+                <Text style={styles.mediaCountText}>{postMedia.length}</Text>
               </View>
             )}
-          </View>
+            {/* Tap to view hint */}
+            {!(postMedia[0].type === 'video' || isVideoUrl(postMedia[0].url)) && (
+              <View style={styles.tapToViewBanner}>
+                <Ionicons
+                  name="expand"
+                  size={13}
+                  color="white"
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={styles.tapToViewText}>
+                  {`View ${postMedia.length > 1 ? `${postMedia.length} photos` : 'full photo'}`}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
         )}
 
-        {/* Dynamic Poll Card rendering */}
+        {/* Poll widget */}
         {post.post_type === 'poll' && (
-          <View style={{ paddingHorizontal: 16 }}>
+          <View style={{ paddingHorizontal: 14 }}>
             <FeedPollWidget feed={post} onVoteSuccess={() => loadData(false)} />
           </View>
         )}
 
-        {/* Buttons footer reactions */}
-        <View style={[styles.postFooter, { paddingHorizontal: 16 }]}>
-          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleLikePost(post.id)}>
-            <Ionicons
-              name={isLiked ? 'heart' : 'heart-outline'}
-              size={20}
-              color={isLiked ? AppColors.error : AppColors.textMedium}
-            />
-            <Text style={[styles.postFooterText, isLiked ? styles.likedText : null]}>
-              {reactions}
-            </Text>
-          </TouchableOpacity>
+        {/* Stats / Engagement row */}
+        <View style={styles.postStatsRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+            <TouchableOpacity style={styles.postStat} onPress={() => handleLikePost(post.id)}>
+              <Ionicons
+                name={isLiked ? 'heart' : 'heart-outline'}
+                size={20}
+                color={isLiked ? AppColors.error : '#3d4a40'}
+              />
+              <Text style={[styles.postStatText, isLiked && { color: AppColors.error }]}>{reactions}</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.postFooterBtn}
-            onPress={() => {
-              setCommentsPostId(post.id);
-              setCommentsPostCount(comments);
-              setCommentsModalVisible(true);
-            }}
-          >
-            <Ionicons name="chatbubble-outline" size={19} color={AppColors.textMedium} />
-            <Text style={styles.postFooterText}>{comments}</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.postStat}
+              onPress={() => handleOpenComments(post.id, comments, post.user?.id)}
+            >
+              <Ionicons name="chatbubble-outline" size={19} color="#3d4a40" />
+              <Text style={styles.postStatText}>{comments}</Text>
+            </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity style={styles.postFooterBtn} onPress={() => handleSharePost(post.id)}>
-            <Ionicons name="share-social-outline" size={19} color={AppColors.textMedium} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+            <TouchableOpacity style={styles.postStat} onPress={() => handleSharePost(post.id)}>
+              <Ionicons name="share-social-outline" size={20} color="#3d4a40" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.postStat}>
+              <Ionicons name="bookmark-outline" size={20} color="#3d4a40" />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     );
@@ -1366,92 +1741,86 @@ export const FeedScreen = () => {
           },
         ]}
       >
-        <TouchableOpacity style={styles.headerAvatarContainer} onPress={() => navigation.navigate('Profile')}>
-          {user?.profileImage ? (
-            <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.headerAvatar} />
-          ) : (
-            <View style={styles.headerAvatarPlaceholder}>
-              <Text style={styles.avatarText}>
-                {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
 
-        <View style={styles.headerSegmentedControl}>
+        {/* Header Main Row — Facebook-style: menu + Ekenox left, icons right */}
+        <View style={styles.headerMainRow}>
+          {/* Hamburger menu + brand name on left */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <TouchableOpacity
+              style={styles.headerMenuBtn}
+              onPress={() => setShowProfilePanel(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={26} color={AppColors.textDark} />
+            </TouchableOpacity>
+            <Text style={styles.headerBrandTitle}>Ekenox</Text>
+          </View>
+
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerActionBtn}
+              onPress={() => navigation.navigate('Collaboration')}
+            >
+              <View style={{ position: 'relative' }}>
+                <Ionicons name="briefcase-outline" size={22} color={AppColors.textDark} />
+                {pendingCollabCount > 0 && (
+                  <View style={[styles.notifBadge, { backgroundColor: '#4F46E5' }]}>
+                    <Text style={styles.notifBadgeText}>
+                      {pendingCollabCount > 99 ? '99+' : pendingCollabCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Messages')}>
+              <View style={{ position: 'relative' }}>
+                <Ionicons name="chatbubbles-outline" size={22} color={AppColors.textDark} />
+                {unreadChatCount > 0 && (
+                  <View style={styles.notifBadge}>
+                    <Text style={styles.notifBadgeText}>
+                      {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Notifications')}>
+              <View style={{ position: 'relative' }}>
+                <Ionicons name="notifications-outline" size={22} color={AppColors.textDark} />
+                {unreadNotifCount > 0 && (
+                  <View style={styles.notifBadge}>
+                    <Text style={styles.notifBadgeText}>
+                      {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Dedicated Top Tab Bar — left-aligned like reference */}
+        <View style={styles.topTabBar}>
           <TouchableOpacity
-            style={[styles.headerSegmentBtn, currentTab === 0 && styles.headerSegmentBtnActive]}
+            style={styles.topTabBtn}
             onPress={() => setCurrentTab(0)}
             activeOpacity={0.8}
           >
-            <Text style={[styles.headerSegmentText, currentTab === 0 && styles.headerSegmentTextActive]}>Feed</Text>
+            <Text style={[styles.topTabText, currentTab === 0 && styles.topTabTextActive]}>Feed</Text>
+            {currentTab === 0 && <View style={styles.activeIndicator} />}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.headerSegmentBtn, currentTab === 1 && styles.headerSegmentBtnActive]}
+            style={styles.topTabBtn}
             onPress={() => setCurrentTab(1)}
             activeOpacity={0.8}
           >
-            <Text style={[styles.headerSegmentText, currentTab === 1 && styles.headerSegmentTextActive]}>Groups</Text>
+            <Text style={[styles.topTabText, currentTab === 1 && styles.topTabTextActive]}>Groups</Text>
+            {currentTab === 1 && <View style={styles.activeIndicator} />}
           </TouchableOpacity>
-        </View>
-
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Messages')}>
-            <Ionicons name="chatbubbles-outline" size={22} color={AppColors.textDark} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.headerActionBtn} onPress={() => navigation.navigate('Notifications')}>
-            <View style={{ position: 'relative' }}>
-              <Ionicons name="notifications-outline" size={22} color={AppColors.textDark} />
-              {unreadNotifCount > 0 && (
-                <View style={styles.notifBadge}>
-                  <Text style={styles.notifBadgeText}>
-                    {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </TouchableOpacity>
+          {/* Spacer so tabs are left-aligned */}
+          <View style={{ flex: 1 }} />
         </View>
       </Animated.View>
-
-      {/* Sticky Create Feed Bar Overlay */}
-      {currentTab === 0 && !isLoading && (
-        <Animated.View
-          style={[
-            styles.createBarContainer,
-            {
-              position: 'absolute',
-              top: 60 + insets.top,
-              left: 0,
-              right: 0,
-              zIndex: 99,
-              opacity: absoluteBarOpacity,
-              transform: [{ translateY: createBarTranslateY }],
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={styles.createBarContent}
-            onPress={() => navigation.navigate('CreatePost')}
-            activeOpacity={0.85}
-          >
-            {user?.profileImage ? (
-              <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
-            ) : (
-              <View style={styles.createBarAvatarPlaceholder}>
-                <Text style={styles.createBarAvatarText}>
-                  {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
-                </Text>
-              </View>
-            )}
-            <Text style={styles.createBarInputPlaceholder}>Share an eco action with the community…</Text>
-            <View style={styles.createBarBtn}>
-              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-              <Text style={styles.createBarBtnText}>Create Feed</Text>
-            </View>
-          </TouchableOpacity>
-        </Animated.View>
-      )}
 
 
       {isLoading ? (
@@ -1464,14 +1833,53 @@ export const FeedScreen = () => {
         currentTab === 0 ? (
           <ScrollView
             style={styles.content}
-            contentContainerStyle={{ paddingTop: 60 + insets.top }}
+            contentContainerStyle={{ paddingTop: 60 + BRAND_BAR_HEIGHT + 48 + insets.top }}
             showsVerticalScrollIndicator={false}
             scrollEventThrottle={16}
             onScroll={handleScroll}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + BRAND_BAR_HEIGHT + 48 + insets.top} />
             }
           >
+            {/* Static Create Feed Card */}
+            <View style={styles.createBarContainer}>
+              <TouchableOpacity
+                style={styles.createBarContent}
+                onPress={() => navigation.navigate('CreatePost')}
+                activeOpacity={0.85}
+              >
+                {user?.profileImage ? (
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      navigation.navigate('Profile', { userId: user?.id });
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      navigation.navigate('Profile', { userId: user?.id });
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.createBarAvatarPlaceholder}>
+                      <Text style={styles.createBarAvatarText}>
+                        {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                <Text style={styles.createBarInputPlaceholder}>Share an eco action with the community…</Text>
+                <View style={styles.createBarBtn}>
+                  <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+                  {/* <Text style={styles.createBarBtnText}>Create Feed</Text> */}
+                </View>
+              </TouchableOpacity>
+            </View>
             {/* Horizontal Stories list sequence */}
             {/* Horizontal Stories list sequence */}
             <View style={styles.storiesContainer}>
@@ -1537,30 +1945,6 @@ export const FeedScreen = () => {
               </View>
             )}
 
-            {/* Top Create Feed Bar */}
-            <View style={styles.createBarContainer}>
-              <TouchableOpacity
-                style={styles.createBarContent}
-                onPress={() => navigation.navigate('CreatePost')}
-                activeOpacity={0.85}
-              >
-                {user?.profileImage ? (
-                  <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
-                ) : (
-                  <View style={styles.createBarAvatarPlaceholder}>
-                    <Text style={styles.createBarAvatarText}>
-                      {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
-                    </Text>
-                  </View>
-                )}
-                <Text style={styles.createBarInputPlaceholder}>Share an eco action with the community…</Text>
-                <View style={styles.createBarBtn}>
-                  <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-                  <Text style={styles.createBarBtnText}>Create Feed</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-
             {/* Featured Events Carousel - Limited to 5 items */}
             {events.length > 0 && (
               <View style={styles.eventsSection}>
@@ -1585,6 +1969,9 @@ export const FeedScreen = () => {
                         </View>
                         <View style={styles.eventContent}>
                           <Text style={styles.eventCardTitle} numberOfLines={1}>{event.title}</Text>
+                          {event.description ? (
+                            <Text style={styles.eventCardDesc} numberOfLines={2}>{event.description}</Text>
+                          ) : null}
                           <View style={styles.eventInfoRow}>
                             <Ionicons name="calendar-outline" size={13} color={AppColors.textMedium} />
                             <Text style={styles.eventInfoText}>{formatEventDates(event.startTime, event.endTime)}</Text>
@@ -1662,35 +2049,76 @@ export const FeedScreen = () => {
           /* Groups tab explorer with Public, My Groups, Discover pills */
           <ScrollView
             style={styles.content}
-            contentContainerStyle={{ paddingTop: 60 + insets.top }}
+            contentContainerStyle={{ paddingTop: 60 + BRAND_BAR_HEIGHT + 48 + insets.top }}
             showsVerticalScrollIndicator={false}
             scrollEventThrottle={16}
             onScroll={(event) => {
-              scrollY.setValue(event.nativeEvent.contentOffset.y);
+              const scrollOffset = event.nativeEvent.contentOffset.y;
+              scrollY.setValue(scrollOffset);
+              setShowFab(scrollOffset > 150);
             }}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} progressViewOffset={60 + BRAND_BAR_HEIGHT + 48 + insets.top} />
             }
           >
             {/* Groups exploration header */}
             <View style={styles.groupsHeaderRow}>
-              <Text style={styles.sectionTitle}>Explore Groups</Text>
-              <Text style={styles.groupsSubtitle}>Connect with Ekenox eco champions around the world.</Text>
+              {/* <Text style={styles.sectionTitle}>Explore Groups</Text>
+              <Text style={styles.groupsSubtitle}>Connect with Ekenox eco champions around the world.</Text> */}
 
-              {/* Top Create Group Bar */}
-              <View style={[styles.createBarContainer, { paddingHorizontal: 0, marginTop: 12 }]}>
+              {/* Card search and create group block */}
+              <View style={styles.searchCardContainer}>
+                {/* Center group icon */}
+                <View style={styles.searchCardIconContainer}>
+                  <Ionicons name="people" size={24} color="#006d40" />
+                </View>
+
+                {/* Search TextInput bar */}
+                <View style={styles.searchCardBar}>
+                  <Ionicons name="search" size={18} color={AppColors.textMedium} />
+                  <TextInput
+                    style={styles.searchCardInput}
+                    placeholder="Find eco communities..."
+                    placeholderTextColor={AppColors.textMedium}
+                    value={groupSearchQuery}
+                    onChangeText={setGroupSearchQuery}
+                  />
+                </View>
+
+                {/* Create Group Button styled like Create Feed Bar */}
                 <TouchableOpacity
                   style={styles.createBarContent}
                   onPress={() => navigation.navigate('CreateGroup')}
                   activeOpacity={0.85}
                 >
-                  <View style={[styles.createBarAvatarPlaceholder, { backgroundColor: '#CCFAF6' }]}>
-                    <Ionicons name="people" size={18} color={AppColors.primary} />
-                  </View>
+                  {user?.profileImage ? (
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        navigation.navigate('Profile', { userId: user?.id });
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Image source={{ uri: resolveMediaUrl(user.profileImage) }} style={styles.createBarAvatar} />
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        navigation.navigate('Profile', { userId: user?.id });
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.createBarAvatarPlaceholder}>
+                        <Text style={styles.createBarAvatarText}>
+                          {user?.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'EC'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
                   <Text style={styles.createBarInputPlaceholder}>Build a new eco community group…</Text>
                   <View style={styles.createBarBtn}>
                     <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-                    <Text style={styles.createBarBtnText}>Create Group</Text>
                   </View>
                 </TouchableOpacity>
               </View>
@@ -1743,165 +2171,200 @@ export const FeedScreen = () => {
                   <Ionicons name="people-outline" size={48} color={AppColors.textLight} />
                   <Text style={styles.emptyText}>No groups available under this filter.</Text>
                 </View>
+              ) : groups.filter((group: any) =>
+                group.name.toLowerCase().includes(groupSearchQuery.toLowerCase()) ||
+                (group.description && group.description.toLowerCase().includes(groupSearchQuery.toLowerCase()))
+              ).length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="search-outline" size={48} color={AppColors.textLight} />
+                  <Text style={styles.emptyText}>No groups match your search.</Text>
+                </View>
               ) : (
-                groups.map(group => {
-                  const isJoined = !!(group.user_membership && group.user_membership.status === 'active');
-                  const isPending = !!(group.user_membership && group.user_membership.status === 'pending');
-                  const isActionLoading = actionLoadingId === group.id;
+                groups
+                  .filter((group: any) =>
+                    group.name.toLowerCase().includes(groupSearchQuery.toLowerCase()) ||
+                    (group.description && group.description.toLowerCase().includes(groupSearchQuery.toLowerCase()))
+                  )
+                  .map((group: any) => {
+                    const isJoined = !!(group.user_membership && group.user_membership.status === 'active');
+                    const isPending = !!(group.user_membership && group.user_membership.status === 'pending');
+                    const isActionLoading = actionLoadingId === group.id;
 
-                  // Get max 3 random mutual friends
-                  const getMutualFriendsSelection = (friendsList: any[]) => {
-                    if (!friendsList || friendsList.length === 0) return [];
-                    const shuffled = [...friendsList].sort(() => 0.5 - Math.random());
-                    return shuffled.slice(0, 3);
-                  };
-                  const mutualSelection = getMutualFriendsSelection(group.mutual_friends || []);
+                    // Get max 3 random mutual friends
+                    const getMutualFriendsSelection = (friendsList: any[]) => {
+                      if (!friendsList || friendsList.length === 0) return [];
+                      const shuffled = [...friendsList].sort(() => 0.5 - Math.random());
+                      return shuffled.slice(0, 3);
+                    };
+                    const mutualSelection = getMutualFriendsSelection(group.mutual_friends || []);
 
-                  return (
-                    <TouchableOpacity
-                      key={group.id}
-                      style={styles.groupCardModernized}
-                      activeOpacity={0.92}
-                      onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
-                    >
-                      {/* Floating Privacy Badge inside card at top-right */}
-                      <View style={styles.groupPrivacyBadgeModernized}>
-                        <Ionicons
-                          name={group.privacy_level === 'private' ? 'lock-closed' : 'globe-outline'}
-                          size={10}
-                          color={group.privacy_level === 'private' ? '#EF4444' : AppColors.textMedium}
-                        />
-                        <Text style={[styles.groupPrivacyTextModernized, group.privacy_level === 'private' && { color: '#EF4444' }]}>
-                          {group.privacy_level.toUpperCase()}
-                        </Text>
-                      </View>
+                    // Cover image resolver with fallbacks
+                    const coverImageUri = group.cover_image_url
+                      ? resolveMediaUrl(group.cover_image_url)
+                      : group.profile_image_url
+                        ? resolveMediaUrl(group.profile_image_url)
+                        : null;
 
-                      <View style={styles.groupCardContentModernized}>
-                        <View style={styles.groupCardMainRowModernized}>
-                          {group.profile_image_url ? (
-                            <Image source={{ uri: resolveMediaUrl(group.profile_image_url) }} style={styles.groupCardLogoModernized} />
+                    return (
+                      <TouchableOpacity
+                        key={group.id}
+                        style={styles.card}
+                        activeOpacity={0.92}
+                        onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
+                      >
+                        {/* Cover Image with Overlays */}
+                        <View style={styles.cardImageWrap}>
+                          {coverImageUri ? (
+                            <Image
+                              source={{ uri: coverImageUri }}
+                              style={styles.cardImage}
+                              resizeMode="cover"
+                            />
                           ) : (
-                            <View style={styles.groupCardLogoPlaceholderModernized}>
-                              <Ionicons name="people" size={18} color={AppColors.primary} />
-                            </View>
-                          )}
-
-                          <View style={styles.groupCardTitleBlockModernized}>
-                            <Text style={styles.groupCardNameModernized} numberOfLines={1}>{group.name}</Text>
-                            <Text style={styles.groupCardCategoryTextModernized}>Eco Group</Text>
-                            {(group as any).tagline ? (
-                              <Text style={styles.groupCardTaglineModernized} numberOfLines={1}>{(group as any).tagline}</Text>
-                            ) : null}
-                          </View>
-                        </View>
-
-                        {/* Member count & role/status row */}
-                        <View style={styles.groupCardMetaInfoRowModernized}>
-                          <View style={styles.groupCardMembersIndicatorModernized}>
-                            <Ionicons name="people-outline" size={14} color={AppColors.textMedium} />
-                            <Text style={styles.groupCardMembersIndicatorTextModernized}>
-                              {group.members_count || 0} member{group.members_count > 1 ? 's' : ''}
-                            </Text>
-                          </View>
-
-                          {group.user_membership && (
-                            <View style={styles.groupCardRoleLabelPillModernized}>
-                              <Text style={styles.groupCardRoleLabelPillTextModernized}>
-                                {group.user_membership.role === 'admin' ? 'Admin' : group.user_membership.status === 'pending' ? 'Pending' : 'Member'}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-
-                        {/* Mutual Friends Avatar Tags Stack */}
-                        {group.mutual_friends && group.mutual_friends.length > 0 && (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 4 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              {group.mutual_friends.map((friend: any, index: number) => {
-                                const friendAvatar = resolveMediaUrl(friend.profile_image || friend.avatar_url);
-                                return (
-                                  <View
-                                    key={friend.id || index}
-                                    style={{
-                                      width: 22,
-                                      height: 22,
-                                      borderRadius: 11,
-                                      borderWidth: 1.5,
-                                      borderColor: 'white',
-                                      marginLeft: index > 0 ? -8 : 0,
-                                      backgroundColor: AppColors.primary,
-                                      overflow: 'hidden',
-                                      justifyContent: 'center',
-                                      alignItems: 'center',
-                                    }}
-                                  >
-                                    {friendAvatar ? (
-                                      <Image source={{ uri: friendAvatar }} style={{ width: '100%', height: '100%' }} />
-                                    ) : (
-                                      <Ionicons name="person" size={10} color="white" />
-                                    )}
-                                  </View>
-                                );
-                              })}
-                            </View>
-                            <Text style={{ fontSize: 11, color: AppColors.textMedium, marginLeft: 6, fontWeight: '500' }}>
-                              Joined by {group.mutual_friends[0]?.full_name || 'mutual friend'}
-                              {group.mutual_friends_count > 1 ? ` +${group.mutual_friends_count - 1} more` : ''}
-                            </Text>
-                          </View>
-                        )}
-
-                        <Text style={styles.groupCardDescModernized} numberOfLines={2}>
-                          {group.description || 'Join this eco community to coordinate actions, share resources, and offset carbon.'}
-                        </Text>
-
-                        <View style={styles.groupCardDividerModernized} />
-
-                        {/* Action buttons */}
-                        <View style={styles.groupCardActionButtonsRowModernized}>
-                          <TouchableOpacity
-                            style={styles.groupCardDetailsActionBtnModernized}
-                            onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
-                          >
-                            <Text style={styles.groupCardDetailsActionBtnTextModernized}>Details</Text>
-                            <Ionicons name="chevron-forward" size={13} color={AppColors.primary} />
-                          </TouchableOpacity>
-
-                          <TouchableOpacity
-                            style={[
-                              styles.groupCardJoinActionBtnModernized,
-                              isJoined && styles.groupCardJoinActionBtnMemberModernized,
-                              isPending && styles.groupCardJoinActionBtnPendingModernized
-                            ]}
-                            onPress={() => handleToggleGroupJoin(group)}
-                            disabled={isActionLoading || isPending}
-                          >
-                            {isActionLoading ? (
-                              <ActivityIndicator size="small" color={isJoined ? AppColors.primary : 'white'} />
-                            ) : (
-                              <>
-                                <Ionicons
-                                  name={isJoined ? 'checkmark-circle' : isPending ? 'hourglass-outline' : 'add-circle-outline'}
-                                  size={14}
-                                  color={isJoined ? AppColors.primary : isPending ? '#D97706' : 'white'}
-                                />
-                                <Text
-                                  style={[
-                                    styles.groupCardJoinActionBtnTextModernized,
-                                    isJoined && styles.groupCardJoinActionBtnTextMemberModernized,
-                                    isPending && styles.groupCardJoinActionBtnTextPendingModernized
-                                  ]}
-                                >
-                                  {isJoined ? 'Joined' : isPending ? 'Pending' : 'Join'}
+                            <View style={[styles.cardImage, styles.cardImageFallback]}>
+                              <View style={styles.groupCoverFallbackCircle}>
+                                <Text style={styles.groupCoverFallbackText}>
+                                  {group.name ? group.name.substring(0, 2).toUpperCase() : 'EC'}
                                 </Text>
-                              </>
-                            )}
-                          </TouchableOpacity>
+                              </View>
+                            </View>
+                          )}
+
+                          {/* Privacy Badge */}
+                          <View style={styles.verifiedBadge}>
+                            <Ionicons
+                              name={group.privacy_level === 'private' ? 'lock-closed' : 'globe-outline'}
+                              size={11}
+                              color="white"
+                            />
+                            <Text style={styles.verifiedText}>
+                              {group.privacy_level.toUpperCase()}
+                            </Text>
+                          </View>
+
+                          {/* Member Badge */}
+                          {isJoined && (
+                            <View style={[styles.privateBadge, { backgroundColor: '#10B981', right: 12, left: undefined }]}>
+                              <Ionicons name="checkmark-circle" size={11} color="white" />
+                              <Text style={styles.privateText}>MEMBER</Text>
+                            </View>
+                          )}
                         </View>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })
+
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle} numberOfLines={2}>{group.name}</Text>
+
+                          {/* Organizer Header */}
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: AppColors.primary, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
+                              <Ionicons name="people" size={12} color="white" />
+                            </View>
+                            <Text style={styles.cardOrganizer} numberOfLines={1}>
+                              Eco Community Group
+                            </Text>
+                          </View>
+
+                          <Text style={styles.cardDescription} numberOfLines={2}>
+                            {group.description || 'Join this eco community to coordinate actions, share resources, and offset carbon.'}
+                          </Text>
+
+                          {/* Info Rows */}
+                          <View style={styles.cardInfoRow}>
+                            <Ionicons
+                              name={group.privacy_level === 'private' ? "lock-closed-outline" : "globe-outline"}
+                              size={13}
+                              color={AppColors.primary}
+                            />
+                            <Text style={styles.cardInfoText} numberOfLines={1}>
+                              {group.privacy_level === 'private' ? 'Private Community' : 'Public Community'}
+                            </Text>
+                          </View>
+
+                          <View style={styles.cardInfoRow}>
+                            <Ionicons name="people-outline" size={13} color={AppColors.primary} />
+                            <Text style={styles.cardInfoText}>
+                              {group.members_count || 0} member{group.members_count !== 1 ? 's' : ''}
+                            </Text>
+
+                            {/* Mutual followers profile stack */}
+                            {group.mutual_friends && group.mutual_friends.length > 0 && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                                {group.mutual_friends.slice(0, 3).map((friend: any, index: number) => {
+                                  const friendAvatar = resolveMediaUrl(friend.profile_image || friend.avatar_url);
+                                  return (
+                                    <View
+                                      key={friend.id || index}
+                                      style={{
+                                        width: 20,
+                                        height: 20,
+                                        borderRadius: 10,
+                                        borderWidth: 1.5,
+                                        borderColor: 'white',
+                                        marginLeft: index > 0 ? -8 : 0,
+                                        backgroundColor: AppColors.primary,
+                                        overflow: 'hidden',
+                                        justifyContent: 'center',
+                                        alignItems: 'center',
+                                      }}
+                                    >
+                                      {friendAvatar ? (
+                                        <Image source={{ uri: friendAvatar }} style={{ width: '100%', height: '100%' }} />
+                                      ) : (
+                                        <Ionicons name="person" size={8} color="white" />
+                                      )}
+                                    </View>
+                                  );
+                                })}
+                              </View>
+                            )}
+                          </View>
+
+                          <View style={styles.cardDivider} />
+
+                          <View style={styles.cardFooter}>
+                            <TouchableOpacity
+                              style={[
+                                styles.regBtn,
+                                isJoined && styles.regBtnActive,
+                                isPending && styles.regBtnPending
+                              ]}
+                              onPress={() => handleToggleGroupJoin(group)}
+                              disabled={isActionLoading || isPending}
+                            >
+                              {isActionLoading ? (
+                                <ActivityIndicator size="small" color={isJoined ? AppColors.primary : 'white'} />
+                              ) : (
+                                <>
+                                  <Ionicons
+                                    name={isJoined ? 'checkmark-circle' : isPending ? 'hourglass-outline' : 'add-circle-outline'}
+                                    size={15}
+                                    color={isJoined ? AppColors.primary : isPending ? '#D97706' : 'white'}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.regBtnText,
+                                      isJoined && styles.regBtnTextActive,
+                                      isPending && styles.regBtnTextPending
+                                    ]}
+                                  >
+                                    {isJoined ? 'Joined' : isPending ? 'Pending' : 'Join Group'}
+                                  </Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                              style={styles.detailBtn}
+                              onPress={() => navigation.navigate('GroupDetail', { groupId: group.id })}
+                            >
+                              <Text style={styles.detailBtnText}>View Details</Text>
+                              <Ionicons name="chevron-forward" size={13} color={AppColors.primary} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
               )}
             </View>
 
@@ -2018,7 +2481,7 @@ export const FeedScreen = () => {
                     onPress={() => {
                       const muted = !isMusicMuted;
                       setIsMusicMuted(muted);
-                      if (muted) bgMusicPlayer.pause(); else bgMusicPlayer.play();
+                      if (muted) bgMusicPlayer?.pause(); else bgMusicPlayer?.play();
                     }}
                   >
                     <Ionicons name={isMusicMuted ? 'volume-mute' : 'volume-high'} size={20} color="white" />
@@ -2057,7 +2520,7 @@ export const FeedScreen = () => {
                       <View style={styles.storyMetaBadge}>
                         <Ionicons name="musical-notes" size={10} color="white" />
                         <Text style={styles.storyMetaBadgeText} numberOfLines={1}>
-                          {stories[selectedStoryIndex]?.music_title ||stories[selectedStoryIndex]?.selected_music}
+                          {stories[selectedStoryIndex]?.music_title || stories[selectedStoryIndex]?.selected_music}
                           {stories[selectedStoryIndex]?.music_singer ? ` · ${stories[selectedStoryIndex].music_singer}` : ''}
                         </Text>
                       </View>
@@ -2067,7 +2530,7 @@ export const FeedScreen = () => {
                       <View style={styles.storyMetaBadge}>
                         <Ionicons name="people" size={10} color="white" />
                         <Text style={styles.storyMetaBadgeText}>
-                          {Array.isArray(stories[selectedStoryIndex].tagged_users) 
+                          {Array.isArray(stories[selectedStoryIndex].tagged_users)
                             ? stories[selectedStoryIndex].tagged_users.map((u: string) => `@${u}`).join(' ')
                             : stories[selectedStoryIndex].tagged_users}
                         </Text>
@@ -2088,7 +2551,7 @@ export const FeedScreen = () => {
 
                   {/* Swipe Up link button */}
                   {stories[selectedStoryIndex]?.link_url && (
-                    <TouchableOpacity 
+                    <TouchableOpacity
                       style={styles.storySwipeUpBtn}
                       onPress={() => {
                         const url = stories[selectedStoryIndex].link_url;
@@ -2192,7 +2655,7 @@ export const FeedScreen = () => {
                   {/* Reaction picker row */}
                   {showReactionPicker && (
                     <View style={styles.storyReactionPicker}>
-                      {['❤️','😂','😮','😢','😡','👏'].map(em => (
+                      {['❤️', '😂', '😮', '😢', '😡', '👏'].map(em => (
                         <TouchableOpacity key={em} onPress={() => handleStoryReact(em)} style={styles.storyReactionEmoji}>
                           <Text style={{ fontSize: 26 }}>{em}</Text>
                         </TouchableOpacity>
@@ -2288,6 +2751,14 @@ export const FeedScreen = () => {
         </Modal>
       )}
 
+      {/* Fullscreen feed media viewer (mirrors Profile screen gallery) */}
+      <FeedMediaCarouselViewer
+        visible={feedMediaViewerVisible}
+        items={feedMediaViewerItems}
+        startIndex={feedMediaViewerIndex}
+        onClose={() => setFeedMediaViewerVisible(false)}
+      />
+
       {/* Story Likes Modal */}
       <Modal
         visible={showLikesModal}
@@ -2376,7 +2847,6 @@ export const FeedScreen = () => {
       {/* Profile Panel drawer overlay */}
       {showProfilePanel && (
         <View style={styles.overlay}>
-          <TouchableOpacity style={styles.overlayCloseArea} onPress={() => setShowProfilePanel(false)} />
           <View style={styles.profilePanel}>
             <View style={styles.profilePanelHeader}>
               <Text style={styles.profilePanelTitle}>My Profile</Text>
@@ -2416,15 +2886,63 @@ export const FeedScreen = () => {
             </View>
 
             <View style={styles.panelMenuItems}>
-              <TouchableOpacity style={styles.panelMenuItem} onPress={() => Alert.alert('My Impact', 'Carbon offset metrics & badges.')}>
+              {/* Admin Dashboard button rendered for Admin users */}
+              {((user?.roles && (user.roles.includes('ROLE_ADMIN') || user.roles.includes('ROLE_SUPER_ADMIN'))) ||
+                (user as any)?.user_roles?.some((r: any) => r.name === 'ROLE_ADMIN' || r === 'ROLE_ADMIN') ||
+                (user as any)?.userRoles?.some((r: any) => r.name === 'ROLE_ADMIN' || r === 'ROLE_ADMIN') ||
+                (user as any)?.is_admin ||
+                (user as any)?.isAdmin) && (
+                <TouchableOpacity
+                  style={[styles.panelMenuItem, { backgroundColor: '#FEF2F2', borderRadius: 10, paddingVertical: 12, marginBottom: 4 }]}
+                  onPress={() => {
+                    setShowProfilePanel(false);
+                    navigation.navigate('AdminDashboard');
+                  }}
+                >
+                  <Ionicons name="shield-half-outline" size={20} color="#DC2626" />
+                  <Text style={[styles.panelMenuText, { color: '#DC2626', fontWeight: '800' }]}>
+                    Admin Dashboard
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={styles.panelMenuItem}
+                onPress={() => {
+                  setShowProfilePanel(false);
+                  navigation.navigate('MyCarShares');
+                }}
+              >
+                <Ionicons name="car-sport-outline" size={20} color={AppColors.primary} />
+                <Text style={styles.panelMenuText}>My Car Shares</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.panelMenuItem}
+                onPress={() => {
+                  setShowProfilePanel(false);
+                  navigation.navigate('Badges');
+                }}
+              >
                 <Ionicons name="ribbon-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>My Impact Badges</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.panelMenuItem} onPress={() => Alert.alert('My Actions', 'Log of eco action initiatives.')}>
+              <TouchableOpacity
+                style={styles.panelMenuItem}
+                onPress={() => {
+                  setShowProfilePanel(false);
+                  navigation.navigate('ActivityHistory');
+                }}
+              >
                 <Ionicons name="checkmark-done-circle-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>Logged Eco Actions</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.panelMenuItem} onPress={() => Alert.alert('Settings', 'App configurations & keys.')}>
+              <TouchableOpacity
+                style={styles.panelMenuItem}
+                onPress={() => {
+                  setShowProfilePanel(false);
+                  navigation.navigate('Settings');
+                }}
+              >
                 <Ionicons name="settings-outline" size={20} color={AppColors.primary} />
                 <Text style={styles.panelMenuText}>Settings & Privacy</Text>
               </TouchableOpacity>
@@ -2435,33 +2953,11 @@ export const FeedScreen = () => {
               <Text style={styles.panelLogoutText}>Sign Out</Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity style={styles.overlayCloseArea} onPress={() => setShowProfilePanel(false)} />
         </View>
       )}
 
-      {/* Comments modal sheet */}
-      {commentsPostId !== null && (
-        <CommentsScreen
-          visible={commentsModalVisible}
-          feedId={commentsPostId}
-          commentsCount={commentsPostCount}
-          onClose={() => setCommentsModalVisible(false)}
-          onCommentAdded={() => {
-            // Update comments stats locally
-            setPosts(prev => prev.map(p => {
-              if (p.id === commentsPostId) {
-                const currentComments = p.stats?.comments ?? 0;
-                return {
-                  ...p,
-                  comments_count: currentComments + 1,
-                  stats: p.stats ? { ...p.stats, comments: currentComments + 1 } : { reactions: p.likes_count, comments: currentComments + 1, shares: 0, views: 0 }
-                };
-              }
-              return p;
-            }));
-            setCommentsPostCount(prev => prev + 1);
-          }}
-        />
-      )}
+      {/* Comments modal sheet — comments now open as a full page via handleOpenComments */}
 
       {/* Custom Edit Post Modal */}
       <Modal
@@ -2506,6 +3002,32 @@ export const FeedScreen = () => {
           </View>
         </View>
       </Modal>
+      {/* Floating Action Button (FAB) for Creating Post/Group */}
+      {showFab && !isLoading && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => {
+            if (currentTab === 0) {
+              navigation.navigate('CreatePost');
+            } else {
+              navigation.navigate('CreateGroup');
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name={currentTab === 0 ? "create" : "add"} size={24} color="white" />
+        </TouchableOpacity>
+      )}
+
+      {/* Custom Action Sheet Modal */}
+      <CustomActionSheetModal
+        visible={actionSheetConfig.visible}
+        title={actionSheetConfig.title}
+        subtitle={actionSheetConfig.subtitle}
+        options={actionSheetConfig.options}
+        onClose={() => setActionSheetConfig(prev => ({ ...prev, visible: false }))}
+        cancelButtonText="Back"
+      />
     </View>
   );
 };
@@ -2516,14 +3038,45 @@ const styles = StyleSheet.create({
     backgroundColor: '#FAFAFA',
   },
   header: {
-    height: 60,
     backgroundColor: 'white',
+    flexDirection: 'column',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  brandBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ECFDF5',
+    height: 36,
+    width: '100%',
+    borderBottomWidth: 1,
+    borderBottomColor: '#D1FAE5',
+  },
+  brandText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: AppColors.primary,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  headerMainRow: {
+    height: 60,
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+  },
+  headerMenuBtn: {
+    padding: 6,
+    borderRadius: 8,
+  },
+  headerBrandTitle: {
+    fontSize: 26,
+    fontWeight: '900',
+    color: AppColors.primary,
+    letterSpacing: 0.3,
   },
   headerAvatarContainer: {
     padding: 2,
@@ -2602,54 +3155,79 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
-  storyCard: {
-    width: 115,
-    height: 165,
-    borderRadius: 16,
-    marginRight: 12,
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  storyCardBg: {
-    width: '100%',
-    height: 95,
-  },
-  storyCardOverlay: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    borderRadius: 10,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  storyCardContent: {
-    padding: 8,
-    flexDirection: 'row',
+  // Circular story bubble styles (matching reference design)
+  storyBubbleWrap: {
     alignItems: 'center',
-    height: 70,
+    marginRight: 14,
+    width: 68,
   },
-  storyCardAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: AppColors.primary,
+  storyBubbleRing: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    padding: 2.5,
+    backgroundColor: AppColors.primary,
+    marginBottom: 6,
   },
-  storyCardName: {
-    fontSize: 10,
-    fontWeight: '700',
+  storyBubbleCircle: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: 'white',
+    overflow: 'hidden',
+  },
+  storyBubbleCircleCreate: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    borderWidth: 2,
+    borderColor: '#E2E8F0',
+    borderStyle: 'dashed',
+    overflow: 'hidden',
+    marginBottom: 6,
+    position: 'relative',
+    backgroundColor: '#F8FAFC',
+  },
+  storyBubbleInnerImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 28,
+  },
+  storyBubblePlusBtn: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: AppColors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  storyBubbleTitle: {
+    fontSize: 11,
+    fontWeight: '600',
     color: AppColors.textDark,
-    marginLeft: 6,
-    flex: 1,
+    textAlign: 'center',
+    maxWidth: 66,
   },
+  // Legacy story card styles kept for skeleton loader
+  storyCard: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    marginRight: 14,
+    overflow: 'hidden',
+    backgroundColor: '#E5E7EB',
+  },
+  storyCardBg: { width: '100%', height: '100%' },
+  storyCardOverlay: { display: 'none' },
+  storyCardContent: { display: 'none' },
+  storyCardAvatar: { width: 28, height: 28, borderRadius: 14 },
+  storyCardName: { fontSize: 10, fontWeight: '700', color: AppColors.textDark },
   tipCard: {
     backgroundColor: '#EEFDFC',
     borderRadius: 14,
@@ -2764,6 +3342,12 @@ const styles = StyleSheet.create({
     color: AppColors.textDark,
     marginBottom: 6,
   },
+  eventCardDesc: {
+    fontSize: 12,
+    color: AppColors.textLight,
+    lineHeight: 17,
+    marginBottom: 4,
+  },
   eventInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2783,55 +3367,103 @@ const styles = StyleSheet.create({
   postsList: {
     paddingHorizontal: 0,
   },
+  // ─── Post card — matches ProfileScreen style ───
   postCard: {
     backgroundColor: 'white',
-    borderRadius: 0,
-    paddingTop: 12,
-    paddingBottom: 12,
+    marginHorizontal: 12,
     marginBottom: 16,
-    borderWidth: 0,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#F0F0F0',
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e2e2e5',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  postAuthorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+  postBannerChallenge: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#E8F5E9', paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8,
   },
+  postBannerGroup: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#EFF6FF', paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8,
+  },
+  postBannerEvent: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#ECFDF5', paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8,
+  },
+  postBannerIconWrap: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#4CAF5020', justifyContent: 'center', alignItems: 'center',
+  },
+  postBannerLabel: { fontSize: 10, color: '#4CAF50', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 } as any,
+  postBannerTitle: { fontSize: 13, color: AppColors.textDark, fontWeight: '700' },
+  postBannerLvlBadge: { backgroundColor: '#E0F2FE', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  postBannerLvlText: { fontSize: 10, color: '#0284C7', fontWeight: '700' },
+  // Post header
+  postHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 },
+  postAuthorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 0 },
   postAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 40, height: 40, borderRadius: 20,
+    borderWidth: 1, borderColor: '#e2e2e5',
   },
-  postAuthorDetails: {
-    marginLeft: 10,
-    flex: 1,
+  postAuthorDetails: { marginLeft: 10, flex: 1 },
+  postAuthorName: { fontSize: 14, fontWeight: '700', color: '#1a1c1e' },
+  postTime: { fontSize: 12, color: '#3d4a40', marginTop: 2 },
+  postOptionBtn: { padding: 4, marginLeft: 8 },
+  postContent: { fontSize: 14, color: '#1a1c1e', lineHeight: 20, paddingHorizontal: 16, paddingBottom: 16 },
+  hashtagsRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, gap: 8, marginBottom: 10 },
+  hashtagPill: { backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
+  hashtagPillText: { color: AppColors.primary, fontSize: 13, fontWeight: '600' },
+  postMediaWrapper: { position: 'relative', marginHorizontal: 0 },
+  postVideoBox: {
+    width: '100%',
+    height: FEED_MEDIA_HEIGHT,
+    backgroundColor: '#000',
+    overflow: 'hidden',
+    position: 'relative',
   },
-  postAuthorName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: AppColors.textDark,
+  postVideoSource: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
+    position: 'relative',
   },
-  postTime: {
-    fontSize: 11,
-    color: AppColors.textLight,
-    marginTop: 1,
+  postMediaImage: { width: '100%', height: FEED_MEDIA_HEIGHT },
+  postMediaBlock: { width: '100%', height: FEED_MEDIA_HEIGHT },
+  postStatsRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#e2e2e5' },
+  postStat: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  postStatText: { fontSize: 12, color: '#3d4a40', fontWeight: '600' },
+  mediaCountBadge: {
+    position: 'absolute', top: 8, right: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 4,
   },
-  postOptionBtn: {
-    padding: 4,
+  mediaCountText: { color: 'white', fontSize: 12, fontWeight: '700' },
+  tapToViewBanner: {
+    position: 'absolute', left: 8, bottom: 8,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 5,
   },
-  postContent: {
-    fontSize: 14,
-    color: AppColors.textDark,
-    lineHeight: 20,
-    marginBottom: 12,
+  tapToViewText: { color: 'white', fontSize: 11, fontWeight: '600' },
+  feedMediaViewerOverlay: { flex: 1, backgroundColor: '#000' },
+  feedMediaViewerHeader: {
+    position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16,
   },
+  feedMediaViewerClose: { padding: 8 },
+  feedMediaViewerCounter: { color: 'white', fontSize: 15, fontWeight: '700' },
+  feedMediaDotsRow: { position: 'absolute', left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', bottom: 20 },
+  feedMediaDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.4)', marginHorizontal: 4 },
+  feedMediaDotActive: { backgroundColor: 'white' },
   postImage: {
     width: '100%',
     height: '100%',
@@ -2873,65 +3505,127 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 4,
   },
-  // Modern Video Controls Styles
-  controlsContainer: {
+  // Upgraded Video Player Styles
+  playingBadge: {
     position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'space-between',
-    zIndex: 10,
+    top: 14,
+    left: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    zIndex: 20,
+    gap: 6,
   },
-  centerPlayContainer: {
-    flex: 1,
+  playingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#006d40',
+  },
+  playingText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
+  },
+  videoSettingsBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    padding: 6,
+    zIndex: 20,
+  },
+  pausedCenterOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 15,
+  },
+  pausedCenterClickArea: {
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  controlsPanel: {
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    paddingTop: 8,
-    paddingBottom: Platform.OS === 'ios' ? 16 : 8,
-    paddingHorizontal: 12,
+  pausedPlayCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  videoBottomPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 10,
+    zIndex: 18,
+  },
+  videoBottomInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  videoTimeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  videoRightIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  videoIconBtn: {
+    padding: 4,
   },
   progressBarWrapper: {
-    height: 12,
+    height: 16,
     justifyContent: 'center',
     width: '100%',
-    marginBottom: 6,
+    position: 'relative',
   },
   progressBarTrack: {
     height: 4,
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
     borderRadius: 2,
-    overflow: 'hidden',
+    position: 'relative',
+    justifyContent: 'center',
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: AppColors.primary,
+    backgroundColor: '#006d40',
+    borderRadius: 2,
   },
-  controlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  controlsGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  controlBtn: {
-    padding: 6,
-  },
-  timeText: {
-    color: 'white',
-    fontSize: 11,
-    fontWeight: '600',
-    minWidth: 75,
-    textAlign: 'center',
+  progressBarThumb: {
+    position: 'absolute',
+    top: -4,
+    marginLeft: -6,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#006d40',
   },
   volumePercentText: {
     color: 'white',
@@ -2997,21 +3691,27 @@ const styles = StyleSheet.create({
   },
   postFooter: {
     flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: '#F5F5F5',
-    paddingTop: 12,
+    alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    marginTop: 4,
+  },
+  postFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   postFooterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   postFooterText: {
-    fontSize: 13,
+    fontSize: 14,
     color: AppColors.textMedium,
-    marginLeft: 6,
+    marginLeft: 5,
+    fontWeight: '500',
   },
   likedText: {
     color: AppColors.error,
@@ -3190,171 +3890,247 @@ const styles = StyleSheet.create({
   },
   groupCardModernized: {
     backgroundColor: 'white',
-    borderRadius: 16,
+    borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#EBEBEB',
+    borderColor: '#bccabd', // matched outline-variant
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 3,
-    marginBottom: 16,
+    shadowRadius: 4,
+    elevation: 2,
+    marginBottom: 20,
     position: 'relative',
   },
-  groupPrivacyBadgeModernized: {
+  groupHeroImageContainer: {
+    height: 190,
+    width: '100%',
+    position: 'relative',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  groupHeroImage: {
+    width: '100%',
+    height: '100%',
+  },
+  groupCoverFallbackContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF', // milk white
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupCoverFallbackCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#E6F4EA', // perfect light circle
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupCoverFallbackText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#006d40', // matched primary
+  },
+  groupPrivacyBadgeOverlay: {
     position: 'absolute',
     top: 12,
-    right: 12,
-    backgroundColor: '#F3F4F6',
+    left: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
     gap: 4,
-    zIndex: 10,
   },
-  groupPrivacyTextModernized: {
-    fontSize: 9,
+  groupPrivacyTextOverlay: {
+    color: 'white',
+    fontSize: 10,
     fontWeight: '700',
-    color: AppColors.textMedium,
+    letterSpacing: 0.5,
+  },
+  groupMemberBadgeOverlay: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: '#d9e6da', // matched secondary-container
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  groupMemberBadgeTextOverlay: {
+    color: '#006d40', // matched primary
+    fontSize: 12,
+    fontWeight: '600',
   },
   groupCardContentModernized: {
     padding: 16,
   },
-  groupCardMainRowModernized: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  groupCardLogoModernized: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-  },
-  groupCardLogoPlaceholderModernized: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: AppColors.primary + '15',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: AppColors.primary + '25',
-  },
-  groupCardTitleBlockModernized: {
-    flex: 1,
-    marginLeft: 12,
-  },
   groupCardNameModernized: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: AppColors.textDark,
-  },
-  groupCardCategoryTextModernized: {
-    fontSize: 11,
-    color: AppColors.primary,
-    fontWeight: '600',
-    marginTop: 1,
-  },
-  groupCardTaglineModernized: {
-    fontSize: 12,
-    color: AppColors.textMedium,
-    marginTop: 2,
-    fontStyle: 'italic',
-  },
-  groupCardMetaInfoRowModernized: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  groupCardMembersIndicatorModernized: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1a1c1e', // matched on-surface
   },
   groupCardMembersIndicatorTextModernized: {
-    fontSize: 12,
-    color: AppColors.textMedium,
+    fontSize: 14,
+    color: '#3d4a40', // matched on-surface-variant
     fontWeight: '500',
   },
-  groupCardRoleLabelPillModernized: {
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  groupCardRoleLabelPillTextModernized: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-  },
   groupCardDescModernized: {
-    fontSize: 13,
-    color: AppColors.textMedium,
-    lineHeight: 18,
+    fontSize: 14,
+    color: '#3d4a40', // matched on-surface-variant
+    lineHeight: 20,
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  activitySnippetContainer: {
+    backgroundColor: '#f3f3f6', // matched surface-container-low
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(188, 202, 189, 0.3)', // matched outline-variant/30
+    marginVertical: 10,
     marginBottom: 12,
   },
-  groupCardDividerModernized: {
-    height: 1,
-    backgroundColor: '#F3F4F6',
-    marginVertical: 4,
-    marginBottom: 12,
+  activitySnippetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  activitySnippetAvatar: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginRight: 6,
+  },
+  activitySnippetUser: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1a1c1e', // matched on-surface
+  },
+  activitySnippetTime: {
+    fontSize: 10,
+    color: '#3d4a40', // matched on-surface-variant
+    marginLeft: 4,
+  },
+  activitySnippetText: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    color: '#3d4a40', // matched on-surface-variant
   },
   groupCardActionButtonsRowModernized: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 4,
   },
   groupCardDetailsActionBtnModernized: {
-    flex: 1.2,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#006d40', // matched primary
     justifyContent: 'center',
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: AppColors.primary + '40',
-    gap: 4,
+    alignItems: 'center',
+    backgroundColor: 'white',
   },
   groupCardDetailsActionBtnTextModernized: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: AppColors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#006d40', // matched primary
   },
   groupCardJoinActionBtnModernized: {
-    flex: 1.2,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#006d40', // matched primary
     justifyContent: 'center',
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: AppColors.primary,
-    gap: 5,
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
   },
   groupCardJoinActionBtnMemberModernized: {
-    backgroundColor: 'white',
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
+    backgroundColor: '#eeeef0', // matched surface-container
+    borderWidth: 0,
+    opacity: 0.7,
   },
   groupCardJoinActionBtnPendingModernized: {
     backgroundColor: '#FEF3C7',
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: '#D97706',
   },
   groupCardJoinActionBtnTextModernized: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '600',
     color: 'white',
   },
   groupCardJoinActionBtnTextMemberModernized: {
-    color: AppColors.primary,
+    color: '#1a1c1e', // matched on-surface
+    fontSize: 13,
+    fontWeight: '600',
   },
   groupCardJoinActionBtnTextPendingModernized: {
     color: '#D97706',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  searchCardContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bccabd', // matched outline-variant
+    padding: 16,
+    marginTop: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  searchCardIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#d9e6da', // matched secondary-container
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  searchCardBar: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f3f6', // matched surface-container-low
+    borderRadius: 8,
+    height: 44,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  searchCardInput: {
+    flex: 1,
+    color: '#1a1c1e', // matched on-surface
+    fontSize: 14,
+    marginLeft: 8,
+    height: '100%',
+    padding: 0,
+  },
+  searchCardBtn: {
+    backgroundColor: '#006d40', // matched primary
+    borderRadius: 8,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  searchCardBtnText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 13,
   },
   groupAvatar: {
     width: '100%',
@@ -3490,6 +4266,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     height: '100%',
     padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
     elevation: 8,
   },
   profilePanelHeader: {
@@ -4217,5 +4997,214 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     marginLeft: 4,
+  },
+
+  // ── Tab bar — matches reference: left-aligned tabs ──
+  topTabBar: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+    height: 46,
+    paddingHorizontal: 4,
+  },
+  topTabBtn: {
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  topTabText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: AppColors.textMedium,
+    paddingBottom: 2,
+  },
+  topTabTextActive: {
+    color: AppColors.primary,
+    fontWeight: '800',
+  },
+  activeIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    left: 12,
+    right: 12,
+    height: 3,
+    backgroundColor: AppColors.primary,
+    borderTopLeftRadius: 2,
+    borderTopRightRadius: 2,
+  },
+  postFollowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: AppColors.primary,
+    backgroundColor: 'rgba(11, 110, 79, 0.05)',
+    marginRight: 8,
+  },
+  postFollowingBtn: {
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F3F4F6',
+  },
+  postFollowBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: AppColors.primary,
+  },
+  postFollowingBtnText: {
+    color: AppColors.textMedium,
+  },
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    marginBottom: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  cardImageWrap: {
+    height: 160,
+    width: '100%',
+    position: 'relative',
+  },
+  cardImage: {
+    width: '100%',
+    height: '100%',
+  },
+  cardImageFallback: {
+    backgroundColor: AppColors.primary + 'C0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifiedBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3B82F6', // Blue for verified
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  verifiedText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  privateBadge: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 3,
+  },
+  privateText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  cardContent: {
+    padding: 16,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: AppColors.textDark,
+    marginBottom: 4,
+    lineHeight: 22,
+  },
+  cardOrganizer: {
+    fontSize: 12,
+    color: AppColors.primary,
+    fontWeight: '600',
+  },
+  cardInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  cardInfoText: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    flex: 1,
+  },
+  cardDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginVertical: 12,
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  regBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: AppColors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    gap: 6,
+    minWidth: 100,
+  },
+  regBtnActive: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  regBtnPending: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  regBtnText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  regBtnTextActive: {
+    color: AppColors.primary,
+  },
+  regBtnTextPending: {
+    color: '#D97706',
+  },
+  detailBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+  },
+  detailBtnText: {
+    fontSize: 12,
+    color: AppColors.primary,
+    fontWeight: '700',
+  },
+  cardDescription: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginTop: 2,
+    marginBottom: 10,
+    lineHeight: 18,
   },
 });

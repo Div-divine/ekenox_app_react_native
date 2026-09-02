@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, SafeAreaView, StatusBar, Image, Alert } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, StatusBar, Image, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { AppColors } from '../theme/colors';
@@ -23,6 +24,13 @@ export const HomeScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={AppColors.background} />
+
+      {/* ─── Ekenox Premium Branding Bar ─── */}
+      <View style={styles.brandBar}>
+        <Ionicons name="leaf" size={18} color={AppColors.primary} />
+        <Text style={styles.brandText}>Ekenox</Text>
+      </View>
+
       <View style={styles.header}>
         <Text style={styles.headerTitle}>eKeNox Eco Conscience</Text>
         <TouchableOpacity style={styles.logoutIcon} onPress={handleLogout}>
@@ -89,6 +97,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: AppColors.background,
   },
+  brandBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#D1FAE5',
+    gap: 8,
+  },
+  brandText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: AppColors.primary,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
   header: {
     height: 60,
     backgroundColor: 'white',
@@ -100,8 +125,8 @@ const styles = StyleSheet.create({
     borderBottomColor: AppColors.divider,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 19,
+    fontWeight: '800',
     color: AppColors.primary,
   },
   logoutIcon: {

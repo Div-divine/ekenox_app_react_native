@@ -7,7 +7,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<AuthResult>;
-  signup: (email: string, password: string, name?: string) => Promise<AuthResult>;
+  signup: (email: string, password: string, name?: string, phone?: string) => Promise<AuthResult>;
   socialLogin: (provider: string, token: string) => Promise<AuthResult>;
   logout: () => Promise<AuthResult>;
   resendVerificationEmail: (userId: number) => Promise<AuthResult>;
@@ -68,9 +68,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return result;
   };
 
-  const signup = async (email: string, password: string, name?: string): Promise<AuthResult> => {
+  const signup = async (email: string, password: string, name?: string, phone?: string): Promise<AuthResult> => {
     setIsLoading(true);
-    const result = await authService.signUpWithEmail(email, password, name);
+    const result = await authService.signUpWithEmail(email, password, name, phone);
     if (result.success && result.user) {
       setUser(result.user);
       const tokenVal = await authService.getToken();

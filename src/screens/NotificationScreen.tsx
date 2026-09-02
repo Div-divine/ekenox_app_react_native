@@ -75,11 +75,27 @@ export const NotificationScreen = () => {
     }
 
     // Navigation logic based on data payload
-    const data = item.data || {};
+    const data = item.data || (item as any).additional_data || (item as any).additionalData || {};
+    if (item.type === 'tag_assigned' || item.type === 'tag_withdrawn') {
+      if (item.related_entity_type === 'association' || data.association_id) {
+        navigation.navigate('AssociationDetail', { associationId: data.association_id || item.related_entity_id });
+      } else if (item.related_entity_type === 'event' || data.event_id) {
+        navigation.navigate('EventDetail', { eventId: data.event_id || item.related_entity_id });
+      } else {
+        Alert.alert(item.title || 'Tag Update', item.body || '');
+      }
+      return;
+    }
+    if (item.type?.startsWith('collaboration_inquiry')) {
+      navigation.navigate('Collaboration');
+      return;
+    }
     if (data.group_id) {
       navigation.navigate('GroupDetail', { groupId: data.group_id });
     } else if (data.association_id) {
       navigation.navigate('AssociationDetail', { associationId: data.association_id });
+    } else if (data.event_id) {
+      navigation.navigate('EventDetail', { eventId: data.event_id });
     } else if (data.feed_id) {
       // Go back to feed tab or tell user
       navigation.navigate('Feed');

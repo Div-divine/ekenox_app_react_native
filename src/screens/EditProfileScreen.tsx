@@ -9,7 +9,6 @@ import {
   Image,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -52,7 +51,7 @@ export default function EditProfileScreen() {
 
     const pickerResult = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
+      allowsEditing: false,
       aspect: [1, 1],
       quality: 0.8,
     });

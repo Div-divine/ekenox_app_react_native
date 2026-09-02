@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppColors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import { AssociationInviteModal } from './AssociationInviteModal';
+import { TagManagementModal } from '../components/TagManagementModal';
 import associationService, {
   Association,
   AssociationMember,
@@ -39,11 +40,16 @@ import { UrlHelper } from '../utils/urlHelper';
 const resolveUrl = (url?: string) => UrlHelper.convertPathToUrl(url);
 
 const ROLE_DISPLAY_NAMES: Record<string, string> = {
-  ADMIN_ASSO: 'Administrator',
+  ADMIN_ASSO: 'Association Administrator',
   SOUS_ADMIN_ASSO: 'Sub-Admin',
   COORD_ASSO: 'Coordinator',
+  COORDINATOR_ASSO: 'Coordinator',
   VOLUNTEER_ASSO: 'Volunteer',
   VIEWER_ASSO: 'Member',
+  PROJECT_MANAGER_ASSO: 'Project Manager',
+  ADMIN_EVENT: 'Event Administrator',
+  USER: 'User',
+  CHATROOM_OWNER: 'Chatroom Owner',
 };
 
 const HEADER_HEIGHT = 240;
@@ -163,6 +169,7 @@ export const AssociationDetailScreen = () => {
 
   // Invite modal
   const [inviteVisible, setInviteVisible] = useState(false);
+  const [tagsModalVisible, setTagsModalVisible] = useState(false);
   const [inviteMessage, setInviteMessage] = useState('');
   const [inviteUserId, setInviteUserId] = useState('');
   const [inviteRoleId, setInviteRoleId] = useState('');
@@ -1171,17 +1178,23 @@ export const AssociationDetailScreen = () => {
 
           return (
             <View key={member.id ? String(member.id) : `member-${idx}`} style={s.memberCard}>
-              {avatar ? (
-                <Image source={{ uri: resolveUrl(avatar) }} style={s.memberAvatar} />
-              ) : (
-                <View style={[s.memberAvatar, s.memberAvatarPlaceholder]}>
-                  <Text style={s.memberAvatarInitial}>{fullName[0].toUpperCase()}</Text>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                onPress={() => navigation.navigate('Profile', { userId: member.user?.id })}
+                activeOpacity={0.7}
+              >
+                {avatar ? (
+                  <Image source={{ uri: resolveUrl(avatar) }} style={s.memberAvatar} />
+                ) : (
+                  <View style={[s.memberAvatar, s.memberAvatarPlaceholder]}>
+                    <Text style={s.memberAvatarInitial}>{fullName[0].toUpperCase()}</Text>
+                  </View>
+                )}
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={s.memberName}>{fullName}{isCurrentUser ? ' (You)' : ''}</Text>
+                  <Text style={s.memberEmail}>{email}</Text>
                 </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={s.memberName}>{fullName}{isCurrentUser ? ' (You)' : ''}</Text>
-                <Text style={s.memberEmail}>{email}</Text>
-              </View>
+              </TouchableOpacity>
               {badge && (
                 <View style={[s.roleBadge, { backgroundColor: badge.bg }]}>
                   <Text style={[s.roleBadgeText, { color: badge.color }]}>{badge.label}</Text>
@@ -1306,7 +1319,7 @@ export const AssociationDetailScreen = () => {
                 )}
               </View>
               <View style={s.categoryBadge}>
-                <Text style={s.categoryBadgeText}>{assoc.category}</Text>
+                <Text style={s.categoryBadgeText}>{typeof assoc.category === 'string' ? assoc.category : ((assoc.category as any)?.display_name || (assoc.category as any)?.name || 'Eco')}</Text>
               </View>
               {roleBadge && (
                 <View style={[s.myRoleBadge, { backgroundColor: roleBadge.bg }]}>
@@ -1826,6 +1839,23 @@ export const AssociationDetailScreen = () => {
                 </TouchableOpacity>
               )}
 
+              {/* Manage Tags & Permissions (Admin Only) */}
+              {isAdmin(role) && (
+                <TouchableOpacity
+                  style={s.adminAction}
+                  onPress={() => {
+                    setMemberOptionsVisible(false);
+                    setTagsModalVisible(true);
+                  }}
+                >
+                  <View style={[s.adminActionIcon, { backgroundColor: '#EEF2FF' }]}>
+                    <Ionicons name="pricetags-outline" size={18} color="#4F46E5" />
+                  </View>
+                  <Text style={s.adminActionText}>Manage Tags & Permissions</Text>
+                  <Ionicons name="chevron-forward" size={16} color={AppColors.textLight} />
+                </TouchableOpacity>
+              )}
+
               {/* Remove Member (Admin Only) */}
               {isAdmin(role) && selectedMember?.role?.name !== 'creator' && selectedMember?.role?.name !== 'ADMIN_ASSO' && (
                 <TouchableOpacity
@@ -1874,7 +1904,7 @@ export const AssociationDetailScreen = () => {
                 <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
                   <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
                     <Text style={{ fontSize: 13, color: AppColors.textDark }}>
-                      Role: <Text style={{ fontWeight: '700' }}>{ROLE_DISPLAY_NAMES[selectedMember.role?.name || ''] || selectedMember.role?.name || ''}</Text>
+                      Role: <Text style={{ fontWeight: '700' }}>{selectedMember.role?.displayName || selectedMember.role?.display_name || ROLE_DISPLAY_NAMES[selectedMember.role?.name || ''] || selectedMember.role?.name || ''}</Text>
                     </Text>
                   </View>
                   <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
@@ -1942,7 +1972,7 @@ export const AssociationDetailScreen = () => {
                         color={isSelected ? AppColors.primary : AppColors.textMedium}
                       />
                       <Text style={{ marginLeft: 12, fontSize: 15, fontWeight: isSelected ? '700' : '500', color: isSelected ? AppColors.primary : AppColors.textDark }}>
-                        {ROLE_DISPLAY_NAMES[roleItem.name] || roleItem.name}
+                        {roleItem.displayName || roleItem.display_name || ROLE_DISPLAY_NAMES[roleItem.name] || roleItem.name}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -2020,6 +2050,20 @@ export const AssociationDetailScreen = () => {
               <Ionicons name="share-social-outline" size={18} color={AppColors.textDark} style={{ marginRight: 10 }} />
               <Text style={{ fontSize: 14, color: AppColors.textDark, fontWeight: '600' }}>Share</Text>
             </TouchableOpacity>
+
+            {/* Tags & Permissions (If Admin) */}
+            {isAdmin(role) && (
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}
+                onPress={() => {
+                  setHeaderMenuVisible(false);
+                  setTagsModalVisible(true);
+                }}
+              >
+                <Ionicons name="pricetags-outline" size={18} color="#4F46E5" style={{ marginRight: 10 }} />
+                <Text style={{ fontSize: 14, color: AppColors.textDark, fontWeight: '600' }}>Tags & Permissions</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Mute / Unmute (If member) */}
             {isMember && (
@@ -2566,6 +2610,15 @@ export const AssociationDetailScreen = () => {
           </View>
         </View>
       </Modal>
+
+      {/* ── Tag Management Modal ── */}
+      <TagManagementModal
+        visible={tagsModalVisible}
+        onClose={() => setTagsModalVisible(false)}
+        targetType="association"
+        targetId={associationId}
+        targetTitle={assoc?.name || 'Association'}
+      />
     </View>
   );
 };

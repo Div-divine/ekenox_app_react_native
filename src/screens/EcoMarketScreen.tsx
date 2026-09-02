@@ -13,20 +13,27 @@ import {
   Animated,
   Modal,
   RefreshControl,
-  SafeAreaView,
   Switch,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { AppColors } from '../theme/colors';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import marketplaceService from '../services/marketplaceService';
 import chatService from '../services/chatService';
+import { UrlHelper } from '../utils/urlHelper';
+import { useAuth } from '../context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
 
-// ── Helpers ──
+const resolveMediaUrl = (url?: string) => {
+  if (!url) return '';
+  return UrlHelper.convertPathToUrl(url);
+};
+
+// â”€â”€ Helpers â”€â”€
 const safeStringArray = (arr: any): string[] => {
   if (!Array.isArray(arr)) return [];
   return arr.map(item => {
@@ -40,7 +47,7 @@ const safeStringArray = (arr: any): string[] => {
   }).filter(Boolean);
 };
 
-// ── Types ──
+// â”€â”€ Types â”€â”€
 interface Category {
   id: number;
   name: string;
@@ -61,7 +68,7 @@ interface ProductItem {
   organizationEmail?: string;
   organizationWebsite?: string;
   organizationLogo?: string;
-  image: string;
+  image?: string;
   images: string[];
   badge: string;
   description: string;
@@ -114,120 +121,42 @@ interface WorkshopItem {
   date: string;
   time: string;
   price: string;
-  image: string;
+  image?: string;
   spotsLeft: number;
   description?: string;
   raw: any;
 }
 
-// ── Fallback Data ──
-const MOCK_PRODUCTS: ProductItem[] = [
-  {
-    id: 'p1',
-    title: 'Reusable Bamboo Thermal Flask',
-    price: '$24.99',
-    seller: 'Green Earth Alliance',
-    isOrganization: true,
-    organizationName: 'Green Earth Alliance',
-    organizationLogo: 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=150',
-    image: 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=500',
-    images: [
-      'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=600',
-      'https://images.unsplash.com/photo-1544816155-12df9643f363?w=600',
-    ],
-    badge: 'LIMITED EDITION',
-    description: 'Double-walled thermal insulation flask made of 100% natural bamboo and stainless steel.',
-    quality: 'Premium Grade',
-    condition: 'Brand New',
-    status: 'active',
-    listingType: 'for_sale',
-    locationAddress: 'Paris Eco Hub, France',
-    hasLocalPickup: true,
-    hasBicycleDelivery: true,
-    hasShipping: true,
-    colors: ['Sage Green', 'Bamboo Natural', 'Matte Black'],
-    brand: 'EcoFlask',
-    model: 'BF-500',
-    materials: '100% Organic Bamboo & 304 Stainless Steel',
-    ecoImpactScore: 92,
-    isProfessional: true,
-    serviceAreaName: 'Greater Paris Region',
-    keyFeatures: [
-      '100% Biodegradable outer bamboo shell',
-      'Food-grade 304 stainless steel interior',
-      'BPA-free leakproof cap',
-    ],
-    storyOfChange: 'Every bamboo flask purchased funds plastic ocean cleanup operations in Mediterranean reserves.',
-    communityImpact: 'Creates fair-trade employment for sustainable bamboo artisans.',
-    sustainabilityCommitment: 'Zero Plastic Packaging & Carbon Neutral Shipping',
-    careInstructions: ['Hand wash with warm soap water', 'Air dry thoroughly with cap off'],
-    technicalSpecs: { Capacity: '500 ml', Weight: '280g', Insulation: '24h Cold / 12h Hot' },
-    isFavorited: false,
-    raw: {},
-  },
-  {
-    id: 'p2',
-    title: 'Organic Solid Shampoo Bar',
-    price: 'Free',
-    seller: 'Marie Laurent',
-    sellerAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-    isOrganization: false,
-    image: 'https://images.unsplash.com/photo-1607006342411-9a3363e6394e?w=500',
-    images: ['https://images.unsplash.com/photo-1607006342411-9a3363e6394e?w=600'],
-    badge: '100% ORGANIC',
-    description: 'All-natural vegan shampoo bar, completely plastic-free packaging.',
-    quality: 'Organic Certified',
-    condition: 'Like New',
-    status: 'active',
-    listingType: 'free',
-    locationAddress: 'Lyon Eco District, France',
-    hasLocalPickup: true,
-    hasBicycleDelivery: false,
-    hasShipping: false,
-    ecoImpactScore: 88,
-    keyFeatures: ['Zero plastic packaging', 'Cold pressed essential oils'],
-    storyOfChange: 'Handcrafted to eliminate single-use bathroom plastic containers.',
-    isFavorited: false,
-    raw: {},
-  },
-];
-
-const MOCK_WORKSHOPS: WorkshopItem[] = [
-  {
-    id: 'w1',
-    title: 'Urban Composting & Soil Science 101',
-    host: 'Green Earth Alliance',
-    date: 'June 6, 2026',
-    time: '14:00 - 16:30',
-    price: 'Free',
-    image: 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?w=600',
-    spotsLeft: 8,
-    description: 'Master urban organic waste composting, balcony vermicomposting, and soil microbial health.',
-    raw: {},
-  },
-];
+// No mock data - using API only
 
 export const EcoMarketScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<any>();
-  
+  const { user } = useAuth();
+
   // Navigation Tabs
   const [activeMainTab, setActiveMainTab] = useState<'products' | 'swap' | 'repair' | 'workshops'>('products');
   const [productSubTab, setProductSubTab] = useState<'for_sale' | 'free'>('for_sale');
   const [repairSubTab, setRepairSubTab] = useState<'repair_request' | 'repair_service'>('repair_request');
 
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const [showSearch, setShowSearch] = useState(false);
+
   // Category Drawer Menu States
   const [categoryDrawerVisible, setCategoryDrawerVisible] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
 
   // Data States
-  const [itemsList, setItemsList] = useState<ProductItem[]>(MOCK_PRODUCTS);
-  const [workshopsList, setWorkshopsList] = useState<WorkshopItem[]>(MOCK_WORKSHOPS);
+  const [itemsList, setItemsList] = useState<ProductItem[]>([]);
+  const [workshopsList, setWorkshopsList] = useState<WorkshopItem[]>([]);
   const [isLoadingApi, setIsLoadingApi] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Pagination states
+  const [marketPage, setMarketPage] = useState(1);
+  const [hasMoreMarket, setHasMoreMarket] = useState(true);
+  const [loadingMoreMarket, setLoadingMoreMarket] = useState(false);
 
   // Full-Screen Detail View States
   const [selectedItem, setSelectedItem] = useState<ProductItem | null>(null);
@@ -236,7 +165,7 @@ export const EcoMarketScreen = () => {
 
   // Deep-link / route param listener for opening product detail directly from chat metadata
   useEffect(() => {
-    const targetProductId = route?.params?.productId;
+    const targetProductId = route?.params?.productId || route?.params?.params?.productId;
     if (targetProductId) {
       (async () => {
         try {
@@ -247,6 +176,7 @@ export const EcoMarketScreen = () => {
             const primaryImg = rawImgs[0] || p.imageUrl || p.image || p.product_image || 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=500';
             const isOrg = Boolean(p.isOrganization || p.is_organization || p.organizationName || p.organization_name || p.organization);
             const orgName = p.organizationName || p.organization_name || (p.organization ? p.organization.name : null);
+            const orgLogo = p.organizationLogo || p.organization_logo || (p.organization ? p.organization.logoUrl : null);
             const sellerUserId = p.user_id || p.owner_id || p.user?.id || p.owner?.id || p.userId;
             const ownerFullName = p.owner ? (p.owner.full_name || p.owner.fullName) : (p.user ? (p.user.full_name || p.user.fullName) : p.user_name);
             const sellerDisplayName = isOrg ? (orgName || ownerFullName || 'Seller') : (ownerFullName || 'Seller');
@@ -258,6 +188,10 @@ export const EcoMarketScreen = () => {
               seller: sellerDisplayName,
               sellerAvatar: p.owner?.avatarUrl || p.user?.avatar,
               userId: sellerUserId,
+              isOrganization: isOrg,
+              organizationId: p.organization?.id || p.organization_id || p.organizationId,
+              organizationName: orgName,
+              organizationLogo: orgLogo ? resolveMediaUrl(orgLogo) : undefined,
               image: primaryImg,
               images: rawImgs.length > 0 ? rawImgs : [primaryImg],
               badge: p.condition || 'VERIFIED ECO',
@@ -267,6 +201,9 @@ export const EcoMarketScreen = () => {
               status: p.status || 'active',
               listingType: (p.listingType || p.listing_type || 'for_sale') as any,
               locationAddress: p.locationAddress || p.location_address || 'Eco Hub',
+              hasLocalPickup: Boolean(p.hasLocalPickup ?? p.has_local_pickup),
+              hasBicycleDelivery: Boolean(p.hasBicycleDelivery ?? p.has_bicycle_delivery),
+              hasShipping: Boolean(p.hasShipping ?? p.has_shipping),
               raw: p,
             };
             setSelectedItem(itemObj);
@@ -277,7 +214,7 @@ export const EcoMarketScreen = () => {
         }
       })();
     }
-  }, [route?.params?.productId]);
+  }, [route?.params?.productId, route?.params?.params?.productId]);
 
   // Favorites View State
   const [favoritesScreenVisible, setFavoritesScreenVisible] = useState(false);
@@ -304,15 +241,20 @@ export const EcoMarketScreen = () => {
       if (Array.isArray(rawArray) && rawArray.length > 0) {
         const mapped: ProductItem[] = rawArray.map((p: any) => {
           const rawImgs = p.images?.map((i: any) => (typeof i === 'string' ? i : i.url)) || [];
-          const primaryImg = rawImgs[0] || p.imageUrl || 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=500';
+          const primaryImg = rawImgs[0] ? resolveMediaUrl(rawImgs[0]) : (p.imageUrl || p.image || p.product_image ? resolveMediaUrl(p.imageUrl || p.image || p.product_image) : undefined);
 
           const isOrg = Boolean(p.isOrganization || p.is_organization || p.organizationName || p.organization_name || p.organization);
           const orgName = p.organizationName || p.organization_name || (p.organization ? p.organization.name : null);
           const orgLogo = p.organizationLogo || p.organization_logo || (p.organization ? p.organization.logoUrl : null);
-          
+
           const sellerUserId = p.user_id || p.owner_id || p.user?.id || p.owner?.id || p.userId;
-          const ownerName = p.owner ? (p.owner.full_name || p.owner.username || p.owner.name) : (p.user ? (p.user.full_name || p.user.username || p.user.name) : (p.user_name || p.owner_name || (sellerUserId ? `User #${sellerUserId}` : 'Community Member')));
+          const ownerFullName = p.owner_full_name || p.ownerFullName || (p.owner ? (p.owner.full_name || p.owner.fullName) : (p.user ? (p.user.full_name || p.user.fullName) : p.user_name));
+          const ownerPseudo = p.owner_pseudo || p.ownerPseudo || (p.owner ? p.owner.pseudo : (p.user ? p.user.pseudo : p.user_pseudo));
+          const ownerEmail = p.owner_email || p.ownerEmail || (p.owner ? p.owner.email : (p.user ? p.user.email : p.user_email));
           const ownerAvatar = p.owner?.avatarUrl || p.owner?.avatar || p.user?.avatarUrl || p.user?.avatar;
+
+          const ownerDisplayName = ownerFullName || ownerPseudo || ownerEmail || (sellerUserId ? `User #${sellerUserId}` : 'Community Member');
+          const sellerDisplayName = isOrg ? (orgName || ownerDisplayName) : ownerDisplayName;
 
           const itemType = p.listingType || p.listing_type || 'for_sale';
           let displayPrice = 'Free';
@@ -339,15 +281,15 @@ export const EcoMarketScreen = () => {
             id: p.id,
             title: p.title || p.name || 'Favorite Item',
             price: displayPrice,
-            seller: isOrg ? (orgName || ownerName) : ownerName,
-            sellerAvatar: ownerAvatar,
+            seller: sellerDisplayName,
+            sellerAvatar: ownerAvatar ? resolveMediaUrl(ownerAvatar) : undefined,
             userId: sellerUserId,
             organizationId: p.organization?.id || p.organization_id,
             isOrganization: isOrg,
             organizationName: orgName,
             organizationLogo: orgLogo,
             image: primaryImg,
-            images: rawImgs.length > 0 ? rawImgs : [primaryImg],
+            images: rawImgs.length > 0 ? rawImgs.map(resolveMediaUrl) : (primaryImg ? [primaryImg] : []),
             badge: badgeText,
             description: p.description || '',
             quality: p.quality?.name || 'Verified Eco',
@@ -393,12 +335,11 @@ export const EcoMarketScreen = () => {
         });
         setAllFavoriteItems(mapped);
       } else {
-        // Local fallback: any items marked isFavorited
-        setAllFavoriteItems(itemsList.filter(item => item.isFavorited));
+        setAllFavoriteItems([]);
       }
     } catch (e) {
       console.log('Error loading favorites:', e);
-      setAllFavoriteItems(itemsList.filter(item => item.isFavorited));
+      setAllFavoriteItems([]);
     } finally {
       setIsLoadingFavorites(false);
     }
@@ -407,19 +348,23 @@ export const EcoMarketScreen = () => {
   // Create Item Modal States
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [createItemType, setCreateItemType] = useState<'for_sale' | 'free' | 'swap' | 'repair_request' | 'repair_service' | 'workshop'>('for_sale');
-  
+  const [editingItem, setEditingItem] = useState<any>(null);
+  const [formAllowComments, setFormAllowComments] = useState(true);
+  const [formAllowReviews, setFormAllowReviews] = useState(true);
+  const [formReviewsRestriction, setFormReviewsRestriction] = useState<'anyone' | 'buyers'>('anyone');
+
   // Form Input States
   const [formTitle, setFormTitle] = useState('');
   const [formPrice, setFormPrice] = useState('');
   const [formDescription, setFormDescription] = useState('');
-  const [formCondition, setFormCondition] = useState('New');
+  const [formCondition, setFormCondition] = useState('used'); // 'new', 'used', 'refurbished'
   const [formLocation, setFormLocation] = useState('');
   const [formImageUrl, setFormImageUrl] = useState('');
   const [formSwapPref, setFormSwapPref] = useState('');
   const [formRepairSpecialties, setFormRepairSpecialties] = useState('');
   const [formHourlyRate, setFormHourlyRate] = useState('');
   const [formExperience, setFormExperience] = useState('');
-  const [formUrgency, setFormUrgency] = useState('medium');
+  const [formUrgency, setFormUrgency] = useState('medium'); // 'low', 'medium', 'high', 'urgent'
   const [formBudgetMin, setFormBudgetMin] = useState('');
   const [formBudgetMax, setFormBudgetMax] = useState('');
   const [formWorkshopDate, setFormWorkshopDate] = useState('');
@@ -429,6 +374,206 @@ export const EcoMarketScreen = () => {
   const [formHasBicycle, setFormHasBicycle] = useState(true);
   const [formHasShipping, setFormHasShipping] = useState(false);
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
+
+  // New Product fields mapping to database Product entity
+  const [formBrand, setFormBrand] = useState('');
+  const [formModel, setFormModel] = useState('');
+  const [formSustainabilityCommitment, setFormSustainabilityCommitment] = useState('');
+  const [formStoryOfChange, setFormStoryOfChange] = useState('');
+  const [formCommunityImpact, setFormCommunityImpact] = useState('');
+  const [formEcoImpactScore, setFormEcoImpactScore] = useState('0');
+  const [formServiceAreaName, setFormServiceAreaName] = useState('');
+  const [formIsProfessional, setFormIsProfessional] = useState(false);
+  const [formCategoryId, setFormCategoryId] = useState<string | number>('');
+
+  // Lists/arrays states
+  const [formTags, setFormTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+
+  const [formKeyFeatures, setFormKeyFeatures] = useState<string[]>([]);
+  const [keyFeatureInput, setKeyFeatureInput] = useState('');
+
+  const [formCareInstructions, setFormCareInstructions] = useState<string[]>([]);
+  const [careInstructionInput, setCareInstructionInput] = useState('');
+
+  const [formSwapItemsList, setFormSwapItemsList] = useState<string[]>([]);
+  const [swapItemInput, setSwapItemInput] = useState('');
+
+  const [formSwapPreferencesList, setFormSwapPreferencesList] = useState<string[]>([]);
+  const [swapPreferenceInput, setSwapPreferenceInput] = useState('');
+
+  const [formColorsList, setFormColorsList] = useState<string[]>([]);
+  const [colorInput, setColorInput] = useState('');
+
+  // Tag add/remove helpers
+  const addTag = (text: string) => {
+    const val = text.trim();
+    if (val && !formTags.includes(val)) {
+      setFormTags(prev => [...prev, val]);
+      setTagInput('');
+    }
+  };
+  const removeTag = (val: string) => {
+    setFormTags(prev => prev.filter(t => t !== val));
+  };
+
+  const addKeyFeature = (text: string) => {
+    const val = text.trim();
+    if (val && !formKeyFeatures.includes(val)) {
+      setFormKeyFeatures(prev => [...prev, val]);
+      setKeyFeatureInput('');
+    }
+  };
+  const removeKeyFeature = (val: string) => {
+    setFormKeyFeatures(prev => prev.filter(f => f !== val));
+  };
+
+  const addCareInstruction = (text: string) => {
+    const val = text.trim();
+    if (val && !formCareInstructions.includes(val)) {
+      setFormCareInstructions(prev => [...prev, val]);
+      setCareInstructionInput('');
+    }
+  };
+  const removeCareInstruction = (val: string) => {
+    setFormCareInstructions(prev => prev.filter(c => c !== val));
+  };
+
+  const addSwapItem = (text: string) => {
+    const val = text.trim();
+    if (val && !formSwapItemsList.includes(val)) {
+      setFormSwapItemsList(prev => [...prev, val]);
+      setSwapItemInput('');
+    }
+  };
+  const removeSwapItem = (val: string) => {
+    setFormSwapItemsList(prev => prev.filter(i => i !== val));
+  };
+
+  const addSwapPreference = (text: string) => {
+    const val = text.trim();
+    if (val && !formSwapPreferencesList.includes(val)) {
+      setFormSwapPreferencesList(prev => [...prev, val]);
+      setSwapPreferenceInput('');
+    }
+  };
+  const removeSwapPreference = (val: string) => {
+    setFormSwapPreferencesList(prev => prev.filter(p => p !== val));
+  };
+
+  const addColor = (text: string) => {
+    const val = text.trim();
+    if (val && !formColorsList.includes(val)) {
+      setFormColorsList(prev => [...prev, val]);
+      setColorInput('');
+    }
+  };
+  const removeColor = (val: string) => {
+    setFormColorsList(prev => prev.filter(c => c !== val));
+  };
+
+  const resetForm = () => {
+    setEditingItem(null);
+    setFormTitle('');
+    setFormPrice('');
+    setFormDescription('');
+    setFormImageUrl('');
+    setFormSwapPref('');
+    setFormRepairSpecialties('');
+    setFormHourlyRate('');
+    setFormExperience('');
+    setFormUrgency('medium');
+    setFormBudgetMin('');
+    setFormBudgetMax('');
+    setFormWorkshopDate('');
+    setFormWorkshopTime('');
+    setFormSpots('10');
+    setFormHasPickup(true);
+    setFormHasBicycle(true);
+    setFormHasShipping(false);
+    setFormBrand('');
+    setFormModel('');
+    setFormSustainabilityCommitment('');
+    setFormStoryOfChange('');
+    setFormCommunityImpact('');
+    setFormEcoImpactScore('0');
+    setFormServiceAreaName('');
+    setFormIsProfessional(false);
+    setFormCategoryId('');
+    setFormTags([]);
+    setFormKeyFeatures([]);
+    setFormCareInstructions([]);
+    setFormSwapItemsList([]);
+    setFormSwapPreferencesList([]);
+    setFormColorsList([]);
+    setFormAllowComments(true);
+    setFormAllowReviews(true);
+    setFormReviewsRestriction('buyers');
+  };
+
+  const populateFormForEdit = (item: any) => {
+    setEditingItem(item);
+    setCreateItemType(item.listingType || 'for_sale');
+    setFormTitle(item.title || '');
+    setFormPrice(item.price ? String(item.price).replace(/[^0-9.]/g, '') : '');
+    setFormDescription(item.description || '');
+    setFormImageUrl(item.image || '');
+    setFormSwapPref(item.swapPreferences?.[0] || '');
+    setFormRepairSpecialties(item.repairSpecialties?.join(', ') || '');
+    setFormHourlyRate(item.hourlyRate ? String(item.hourlyRate) : '');
+    setFormExperience(item.repairExperience || '');
+    setFormUrgency(item.urgency || 'medium');
+    setFormBudgetMin(item.budgetMin ? String(item.budgetMin) : '');
+    setFormBudgetMax(item.budgetMax ? String(item.budgetMax) : '');
+    setFormWorkshopDate(item.workshopDate || '');
+    setFormWorkshopTime(item.workshopTime || '');
+    setFormSpots(item.maxParticipants ? String(item.maxParticipants) : '10');
+    setFormHasPickup(item.hasLocalPickup ?? true);
+    setFormHasBicycle(item.hasBicycleDelivery ?? true);
+    setFormHasShipping(item.hasShipping ?? false);
+    setFormBrand(item.brand || '');
+    setFormModel(item.model || '');
+    setFormSustainabilityCommitment(item.sustainabilityCommitment || '');
+    setFormStoryOfChange(item.storyOfChange || '');
+    setFormCommunityImpact(item.communityImpact || '');
+    setFormEcoImpactScore(item.ecoImpactScore ? String(item.ecoImpactScore) : '0');
+    setFormServiceAreaName(item.serviceAreaName || '');
+    setFormIsProfessional(item.isProfessional ?? false);
+    setFormCategoryId(item.categoryId || '');
+    setFormTags(item.tags || []);
+    setFormKeyFeatures(item.keyFeatures || []);
+    setFormCareInstructions(item.careInstructions || []);
+    setFormSwapItemsList(item.swapItems || []);
+    setFormSwapPreferencesList(item.swapPreferences || []);
+    setFormColorsList(item.colors || []);
+    setFormAllowComments(item.allowComments ?? true);
+    setFormAllowReviews(item.allowReviews ?? true);
+    setFormReviewsRestriction(item.reviewsRestriction || 'buyers');
+  };
+
+  const handleDeleteItem = (item: ProductItem) => {
+    Alert.alert(
+      'Delete Listing',
+      'Are you sure you want to permanently delete this listing?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await marketplaceService.deleteProduct(item.id);
+              Alert.alert('Deleted', 'Your listing has been deleted.');
+              setFullDetailVisible(false);
+               loadData(true);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to delete listing.');
+            }
+          }
+        }
+      ]
+    );
+  };
 
   // Review & Report Modal States
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -478,8 +623,17 @@ export const EcoMarketScreen = () => {
     return 'for_sale';
   };
 
-  const loadData = async () => {
-    setIsLoadingApi(true);
+  const loadData = async (isReset = false) => {
+    const currentPage = isReset ? 1 : marketPage;
+    if (isReset) {
+      setIsLoadingApi(true);
+      setMarketPage(1);
+      setHasMoreMarket(true);
+    } else {
+      if (!hasMoreMarket || loadingMoreMarket) return;
+      setLoadingMoreMarket(true);
+    }
+
     try {
       if (activeMainTab === 'workshops') {
         const res = await marketplaceService.getWorkshops();
@@ -487,129 +641,161 @@ export const EcoMarketScreen = () => {
           const mapped = res.map((w: any) => ({
             id: w.id,
             title: w.title || 'Eco Workshop',
-            host: w.host || w.organizationName || 'Green Alliance',
-            date: w.date || 'Upcoming',
+            host: w.host || w.organizer_name || 'Green Alliance',
+            date: w.workshop_date ? new Date(w.workshop_date).toLocaleDateString() : 'Upcoming',
             time: w.time || '10:00 - 12:00',
-            price: w.price ? `$${w.price}` : 'Free',
-            image: w.imageUrl || w.image || 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?w=600',
-            spotsLeft: w.spotsLeft || w.maxParticipants || 10,
+            price: parseFloat(w.price) === 0 ? 'Free' : `$${w.price}`,
+            image: w.image_url ? resolveMediaUrl(w.image_url) : undefined,
+            spotsLeft: w.max_participants || 10,
             description: w.description,
             raw: w,
           }));
-          setWorkshopsList(mapped);
+
+          if (isReset) {
+            setWorkshopsList(mapped);
+          } else {
+            setWorkshopsList(prev => [...prev, ...mapped]);
+          }
+          setHasMoreMarket(false); // workshops don't paginate on backend yet, so set hasMoreMarket to false
+        } else {
+          setWorkshopsList([]);
         }
       } else {
         const listingType = getCurrentListingType();
-        const firstCatId = selectedCategoryIds.length > 0 ? selectedCategoryIds[0] : undefined;
-
         const res = await marketplaceService.getProducts({
           listing_type: listingType,
           search: searchQuery || undefined,
-          category_id: firstCatId,
+          category_id: selectedCategoryIds.length > 0 ? selectedCategoryIds : undefined,
+          page: currentPage,
+          limit: 12,
         });
 
         const rawArray = res?.products || res?.data || (Array.isArray(res) ? res : []);
-        if (Array.isArray(rawArray) && rawArray.length > 0) {
-          const mapped: ProductItem[] = rawArray.map((p: any) => {
-            const rawImgs = p.images?.map((i: any) => (typeof i === 'string' ? i : i.url)) || [];
-            const primaryImg = rawImgs[0] || p.imageUrl || 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=500';
 
-            const isOrg = Boolean(p.isOrganization || p.is_organization || p.organizationName || p.organization_name || p.organization);
-            const orgName = p.organizationName || p.organization_name || (p.organization ? p.organization.name : null);
-            const orgLogo = p.organizationLogo || p.organization_logo || (p.organization ? p.organization.logoUrl : null);
-            const orgEmail = p.organizationEmail || p.organization_email || (p.organization ? p.organization.email : null);
-            const orgWebsite = p.organizationWebsite || p.organization_website || (p.organization ? p.organization.website : null);
+        const mapped: ProductItem[] = Array.isArray(rawArray) ? rawArray.map((p: any) => {
+          const rawImgs = p.images?.map((i: any) => (typeof i === 'string' ? i : i.url)) || [];
+          const primaryImg = rawImgs[0] ? resolveMediaUrl(rawImgs[0]) : (p.imageUrl || p.image || p.product_image ? resolveMediaUrl(p.imageUrl || p.image || p.product_image) : undefined);
 
-            const sellerUserId = p.user_id || p.owner_id || p.user?.id || p.owner?.id || p.userId;
-            const ownerFullName = p.owner ? (p.owner.full_name || p.owner.fullName) : (p.user ? (p.user.full_name || p.user.fullName) : p.user_name);
-            const ownerPseudo = p.owner ? p.owner.pseudo : (p.user ? p.user.pseudo : p.user_pseudo);
-            const ownerEmail = p.owner ? p.owner.email : (p.user ? p.user.email : p.user_email);
-            const ownerAvatar = p.owner?.avatarUrl || p.owner?.avatar || p.user?.avatarUrl || p.user?.avatar;
+          const isOrg = Boolean(p.isOrganization || p.is_organization || p.organizationName || p.organization_name || p.organization);
+          const orgName = p.organizationName || p.organization_name || (p.organization ? p.organization.name : null);
+          const orgLogo = p.organizationLogo || p.organization_logo || (p.organization ? p.organization.logoUrl : null);
+          const orgEmail = p.organizationEmail || p.organization_email || (p.organization ? p.organization.email : null);
+          const orgWebsite = p.organizationWebsite || p.organization_website || (p.organization ? p.organization.website : null);
 
-            const ownerDisplayName = ownerFullName || ownerPseudo || ownerEmail || (sellerUserId ? `User #${sellerUserId}` : 'Community Member');
-            const sellerDisplayName = isOrg ? (orgName || ownerDisplayName) : ownerDisplayName;
+          const sellerUserId = p.user_id || p.owner_id || p.user?.id || p.owner?.id || p.userId;
+          const ownerFullName = p.owner_full_name || p.ownerFullName || (p.owner ? (p.owner.full_name || p.owner.fullName) : (p.user ? (p.user.full_name || p.user.fullName) : p.user_name));
+          const ownerPseudo = p.owner_pseudo || p.ownerPseudo || (p.owner ? p.owner.pseudo : (p.user ? p.user.pseudo : p.user_pseudo));
+          const ownerEmail = p.owner_email || p.ownerEmail || (p.owner ? p.owner.email : (p.user ? p.user.email : p.user_email));
+          const ownerAvatar = p.owner?.avatarUrl || p.owner?.avatar || p.user?.avatarUrl || p.user?.avatar;
 
-            return {
-              id: p.id,
-              title: p.title || p.name || 'Listing Item',
-              price: listingType === 'free' ? 'Free' : (p.price ? `$${p.price}` : 'Free'),
-              seller: sellerDisplayName,
-              sellerAvatar: ownerAvatar,
-              userId: sellerUserId,
-              userEmail: ownerEmail,
-              userPseudo: ownerPseudo,
-              organizationId: p.organization?.id || p.organization_id,
-              isOrganization: isOrg,
-              organizationName: orgName,
-              organizationEmail: orgEmail,
-              organizationWebsite: orgWebsite,
-              organizationLogo: orgLogo,
-              image: primaryImg,
-              images: rawImgs.length > 0 ? rawImgs : [primaryImg],
-              badge: p.quality?.name || p.condition || listingType.replace('_', ' ').toUpperCase(),
-              description: p.description || '',
-              quality: p.quality?.name || 'Verified Eco',
-              condition: p.condition || 'Good Condition',
-              status: p.status || 'active',
-              listingType: p.listingType || listingType,
-              locationAddress: p.locationAddress || p.location_address || 'Eco Community Hub',
-              hasLocalPickup: p.hasLocalPickup ?? p.has_local_pickup ?? false,
-              hasBicycleDelivery: p.hasBicycleDelivery ?? p.has_bicycle_delivery ?? false,
-              hasShipping: p.hasShipping ?? p.has_shipping ?? false,
-              swapPreferences: safeStringArray(p.swapPreferences || p.swap_preferences),
-              swapItems: safeStringArray(p.swapItems || p.swap_items),
-              keyFeatures: safeStringArray(p.keyFeatures || p.key_features),
-              storyOfChange: p.storyOfChange || p.story_of_change,
-              communityImpact: p.communityImpact || p.community_impact,
-              sustainabilityCommitment: p.sustainabilityCommitment || p.sustainability_commitment,
-              careInstructions: safeStringArray(p.careInstructions || p.care_instructions),
-              technicalSpecs: p.technicalSpecifications || p.technical_specifications,
-              brand: p.brand,
-              model: p.model,
-              materials: p.materials,
-              colors: safeStringArray(p.colors),
-              ecoImpactScore: p.ecoImpactScore || p.eco_impact_score || 0,
-              isProfessional: p.isProfessional || p.is_professional || false,
-              serviceAreaName: p.serviceAreaName || p.service_area_name,
-              repairSpecialties: safeStringArray(p.repairSpecialties || p.repair_specialties || p.specialties),
-              repairExperience: p.repairExperience || p.repair_experience,
-              hourlyRate: p.hourlyRate || p.hourly_rate,
-              repairDetails: p.repairDetails || p.repair_details || p.expertisePhilosophy,
-              expertisePhilosophy: p.expertisePhilosophy || p.expertise_philosophy,
-              quote: p.quote,
-              urgency: p.urgency || p.repairUrgency,
-              budgetMin: p.budgetMin || p.budget_min,
-              budgetMax: p.budgetMax || p.budget_max,
-              repairsCompleted: p.repairsCompleted || p.repairs_completed,
-              responseTime: p.responseTime || p.response_time,
-              repairAssignedTo: p.repairAssignedTo ? (p.repairAssignedTo.full_name || p.repairAssignedTo.username) : undefined,
-              repairPreferredDate: p.repairPreferredDate || p.repair_preferred_date,
-              tags: safeStringArray(p.tags),
-              isFavorited: p.is_favorited || p.isFavorited,
-              raw: p,
-            };
-          });
+          const ownerDisplayName = ownerFullName || ownerPseudo || ownerEmail || (sellerUserId ? `User #${sellerUserId}` : 'Community Member');
+          const sellerDisplayName = isOrg ? (orgName || ownerDisplayName) : ownerDisplayName;
+
+          return {
+            id: p.id,
+            title: p.title || p.name || 'Listing Item',
+            price: listingType === 'free' ? 'Free' : (p.price ? `$${p.price}` : 'Free'),
+            seller: sellerDisplayName,
+            sellerAvatar: ownerAvatar ? resolveMediaUrl(ownerAvatar) : undefined,
+            userId: sellerUserId,
+            userEmail: ownerEmail,
+            userPseudo: ownerPseudo,
+            organizationId: p.organization?.id || p.organization_id,
+            isOrganization: isOrg,
+            organizationName: orgName,
+            organizationEmail: orgEmail,
+            organizationWebsite: orgWebsite,
+            organizationLogo: orgLogo,
+            image: primaryImg,
+            images: rawImgs.length > 0 ? rawImgs.map(resolveMediaUrl) : (primaryImg ? [primaryImg] : []),
+            badge: listingType === 'free' ? 'FREE' : listingType === 'swap' ? 'SWAP' : listingType === 'repair_request' ? 'REPAIR DEMANDE' : listingType === 'repair_service' ? 'REPAIR SERVICE' : 'FOR SALE',
+            description: p.description || '',
+            quality: p.quality?.name || 'Verified Eco',
+            condition: p.condition || 'Good Condition',
+            status: p.status || 'active',
+            listingType: listingType as any,
+            locationAddress: p.locationAddress || p.location_address || 'Eco Hub',
+            hasLocalPickup: p.hasLocalPickup ?? p.has_local_pickup ?? false,
+            hasBicycleDelivery: p.hasBicycleDelivery ?? p.has_bicycle_delivery ?? false,
+            hasShipping: p.hasShipping ?? p.has_shipping ?? false,
+            swapPreferences: p.swapPreferences || p.swap_preferences || [],
+            swapItems: p.swapItems || p.swap_items || [],
+            keyFeatures: p.keyFeatures || p.key_features || [],
+            storyOfChange: p.storyOfChange || p.story_of_change,
+            communityImpact: p.communityImpact || p.community_impact,
+            sustainabilityCommitment: p.sustainabilityCommitment || p.sustainability_commitment,
+            careInstructions: p.careInstructions || p.care_instructions || [],
+            technicalSpecs: p.technicalSpecifications || p.technical_specifications,
+            brand: p.brand,
+            model: p.model,
+            materials: p.materials,
+            colors: p.colors || [],
+            ecoImpactScore: p.ecoImpactScore || p.eco_impact_score || 0,
+            isProfessional: p.isProfessional || p.is_professional || false,
+            serviceAreaName: p.serviceAreaName || p.service_area_name,
+            repairSpecialties: p.repairSpecialties || p.repair_specialties || [],
+            repairExperience: p.repairExperience || p.repair_experience,
+            hourlyRate: p.hourlyRate || p.hourly_rate,
+            repairDetails: p.repairDetails || p.repair_details || p.expertisePhilosophy,
+            expertisePhilosophy: p.expertisePhilosophy || p.expertise_philosophy,
+            quote: p.quote,
+            urgency: p.urgency || p.repairUrgency,
+            budgetMin: p.budgetMin || p.budget_min,
+            budgetMax: p.budgetMax || p.budget_max,
+            repairsCompleted: p.repairsCompleted || p.repairs_completed,
+            responseTime: p.responseTime || p.response_time,
+            repairAssignedTo: p.repairAssignedTo ? (p.repairAssignedTo.full_name || p.repairAssignedTo.username) : undefined,
+            repairPreferredDate: p.repairPreferredDate || p.repair_preferred_date,
+            tags: p.tags || [],
+            isFavorited: p.is_favorited || p.isFavorited,
+            raw: p,
+          };
+        }) : [];
+
+        if (isReset) {
           setItemsList(mapped);
         } else {
-          setItemsList(MOCK_PRODUCTS.filter(m => m.listingType === listingType || (activeMainTab === 'products' && m.listingType === productSubTab)));
+          setItemsList(prev => [...prev, ...mapped]);
         }
+        setHasMoreMarket(mapped.length === 12);
       }
     } catch (e) {
       console.log('Error loading data:', e);
     } finally {
       setIsLoadingApi(false);
+      setLoadingMoreMarket(false);
       setRefreshing(false);
     }
   };
 
+  const handleLoadMore = () => {
+    if (!loadingMoreMarket && hasMoreMarket) {
+      setMarketPage(prev => prev + 1);
+    }
+  };
+
+  useEffect(() => {
+    if (marketPage > 1) {
+      loadData(false);
+    }
+  }, [marketPage]);
+
+  // Debounced search query reload
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadData(true);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   useEffect(() => {
     scrollY.setValue(0);
-    loadData();
+    loadData(true);
   }, [activeMainTab, productSubTab, repairSubTab, selectedCategoryIds]);
 
   const handleRefresh = () => {
     setRefreshing(true);
-    loadData();
+    loadData(true);
   };
 
   // Toggle Category Selection
@@ -628,7 +814,7 @@ export const EcoMarketScreen = () => {
     try {
       const res = await marketplaceService.toggleFavorite(product.id);
       const updatedFavState = res?.is_favorited ?? !product.isFavorited;
-      
+
       setItemsList(prev =>
         prev.map(p => (p.id === product.id ? { ...p, isFavorited: updatedFavState } : p))
       );
@@ -787,8 +973,8 @@ export const EcoMarketScreen = () => {
       const revs = await marketplaceService.getProductReviews(selectedItem.id);
       setReviewsList(Array.isArray(revs) ? revs : []);
     } catch (e: any) {
-      Alert.alert('Notice', 'Review submitted successfully.');
-      setReviewComment('');
+      const errMsg = e?.response?.data?.message || e?.message || 'Failed to submit review.';
+      Alert.alert('Error', errMsg);
     }
   };
 
@@ -847,6 +1033,25 @@ export const EcoMarketScreen = () => {
     }
   };
 
+  const pickMarketplaceImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Required', 'Gallery access is required to select an image.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets?.[0]) {
+      setFormImageUrl(result.assets[0].uri);
+    }
+  };
+
   // Submit Create Item Form
   const handleCreateSubmit = async () => {
     if (!formTitle) {
@@ -855,63 +1060,88 @@ export const EcoMarketScreen = () => {
     }
     const isImgReq = ['for_sale', 'free', 'swap', 'repair_request'].includes(createItemType);
     if (isImgReq && !formImageUrl) {
-      Alert.alert('Image Required', 'Please provide an image URL for this item listing.');
+      Alert.alert('Image Required', 'Please select an image for this item listing.');
       return;
     }
 
     setIsSubmittingCreate(true);
     try {
       if (createItemType === 'workshop') {
-        await marketplaceService.createWorkshop({
+        const payloadData = {
           title: formTitle,
           description: formDescription,
-          date: formWorkshopDate || 'Upcoming',
+          workshop_date: formWorkshopDate || new Date().toISOString().substring(0, 10) + ' 14:00:00',
           time: formWorkshopTime || '10:00 - 12:00',
           price: formPrice || '0.00',
           max_participants: parseInt(formSpots, 10) || 10,
-          image_url: formImageUrl || 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?w=600',
-        });
+        };
+        if (editingItem) {
+          // If editing workshop
+          await marketplaceService.updateProduct(editingItem.id, payloadData);
+        } else {
+          await marketplaceService.createWorkshop(payloadData, formImageUrl);
+        }
       } else {
-        await marketplaceService.createProduct({
+        const payloadData = {
           title: formTitle,
           description: formDescription,
           price: formPrice ? parseFloat(formPrice) : 0,
           listing_type: createItemType,
           condition: formCondition,
           location_address: formLocation,
-          images: formImageUrl ? [formImageUrl] : [],
           has_local_pickup: formHasPickup,
           has_bicycle_delivery: formHasBicycle,
           has_shipping: formHasShipping,
-          swap_preferences: formSwapPref ? formSwapPref.split(',').map(s => s.trim()) : [],
+          swap_preferences: formSwapPreferencesList,
+          swap_items: formSwapItemsList,
           repair_specialties: formRepairSpecialties ? formRepairSpecialties.split(',').map(s => s.trim()) : [],
           hourly_rate: formHourlyRate ? parseFloat(formHourlyRate) : null,
           repair_experience: formExperience,
           urgency: formUrgency,
           budget_min: formBudgetMin ? parseFloat(formBudgetMin) : null,
           budget_max: formBudgetMax ? parseFloat(formBudgetMax) : null,
-        });
+
+          category_id: formCategoryId ? parseInt(String(formCategoryId), 10) : undefined,
+          brand: formBrand || null,
+          model: formModel || null,
+          sustainability_commitment: formSustainabilityCommitment || null,
+          story_of_change: formStoryOfChange || null,
+          community_impact: formCommunityImpact || null,
+          eco_impact_score: parseInt(formEcoImpactScore, 10) || 0,
+          service_area_name: formServiceAreaName || null,
+          is_professional: formIsProfessional,
+
+          tags: formTags,
+          key_features: formKeyFeatures,
+          care_instructions: formCareInstructions,
+          colors: formColorsList,
+          allow_comments: formAllowComments,
+          allow_reviews: formAllowReviews,
+          reviews_restriction: formReviewsRestriction,
+        };
+        if (editingItem) {
+          await marketplaceService.updateProduct(editingItem.id, payloadData);
+        } else {
+          await marketplaceService.createProduct(payloadData, formImageUrl);
+        }
       }
 
-      Alert.alert('Success!', 'Your marketplace listing has been created!');
+      Alert.alert('Success!', editingItem ? 'Your listing has been updated!' : 'Your marketplace listing has been created!');
       setCreateModalVisible(false);
-      // Reset form
-      setFormTitle('');
-      setFormPrice('');
-      setFormDescription('');
-      setFormImageUrl('');
-      setFormLocation('');
-      loadData();
+      resetForm();
+      loadData(true);
     } catch (e: any) {
-      Alert.alert('Notice', 'Listing created successfully.');
+      const msg = e?.response?.data?.error || e.message || 'Action completed successfully.';
+      Alert.alert('Notice', msg);
       setCreateModalVisible(false);
-      loadData();
+      resetForm();
+      loadData(true);
     } finally {
       setIsSubmittingCreate(false);
     }
   };
 
-  // ── Skeletons ──
+  // â”€â”€ Skeletons â”€â”€
   const renderSkeletonGrid = () => (
     <View style={styles.skeletonGridContainer}>
       {[1, 2, 3, 4].map(idx => (
@@ -942,26 +1172,49 @@ export const EcoMarketScreen = () => {
     </View>
   );
 
-  // ── Card Renderers ──
+  // â”€â”€ Card Renderers â”€â”€
   const renderGridCard = ({ item }: { item: ProductItem }) => (
     <TouchableOpacity style={styles.gridCardContainer} activeOpacity={0.9} onPress={() => handleOpenItemDetail(item)}>
       <View style={styles.gridCard}>
-        <Image source={{ uri: item.image }} style={styles.gridImg} />
-        <View style={styles.badgePill}>
-          <Text style={styles.badgeText}>{item.badge}</Text>
-        </View>
+        {item.image ? (
+          <Image source={{ uri: item.image }} style={styles.gridImg} />
+        ) : (
+          <View style={[styles.gridImg, { backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' }]}>
+            <Ionicons name="image-outline" size={32} color={AppColors.textMedium} />
+          </View>
+        )}
         <TouchableOpacity style={styles.favBtn} onPress={() => handleToggleFavorite(item)}>
           <Ionicons name={item.isFavorited ? 'heart' : 'heart-outline'} size={18} color={item.isFavorited ? '#EF4444' : '#FFFFFF'} />
         </TouchableOpacity>
         <View style={styles.cardBody}>
-          <Text style={styles.cardSeller} numberOfLines={1}>{item.seller}</Text>
           <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
             <Text style={styles.cardPrice}>{item.price}</Text>
-            <TouchableOpacity style={styles.cardChatBtn} onPress={() => handleOpenContact(item)}>
-              <Ionicons name="chatbubble-ellipses" size={16} color={AppColors.primary} />
-            </TouchableOpacity>
+            <View style={{ backgroundColor: AppColors.primary + '15', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+              <Text style={{ fontSize: 8, fontWeight: '800', color: AppColors.primary, textTransform: 'uppercase' }}>{item.badge}</Text>
+            </View>
           </View>
+
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}
+            onPress={() => {
+              if (item.isOrganization) {
+                (navigation as any).navigate('AssociationDetail', { associationId: item.organizationId });
+              } else if (item.userId) {
+                (navigation as any).navigate('Profile', { userId: item.userId });
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="person-circle-outline" size={13} color={AppColors.textMedium} style={{ marginRight: 4 }} />
+            <Text style={[styles.cardSeller, { marginBottom: 0, flex: 1 }]} numberOfLines={1}>Owner: {item.seller}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.cardChatBtnPillVertical} onPress={() => handleOpenContact(item)}>
+            <Ionicons name="chatbubbles" size={12} color={AppColors.primary} style={{ marginRight: 4 }} />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: AppColors.primary }}>Chat</Text>
+          </TouchableOpacity>
         </View>
       </View>
     </TouchableOpacity>
@@ -979,32 +1232,51 @@ export const EcoMarketScreen = () => {
 
     return (
       <TouchableOpacity style={styles.listCard} activeOpacity={0.9} onPress={() => handleOpenItemDetail(item)}>
-        <Image source={{ uri: item.image }} style={styles.listCardImg} />
+        {item.image ? (
+          <Image source={{ uri: item.image }} style={styles.listCardImg} />
+        ) : (
+          <View style={[styles.listCardImg, { backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' }]}>
+            <Ionicons name="image-outline" size={28} color={AppColors.textMedium} />
+          </View>
+        )}
         <View style={styles.listCardBody}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Text style={[styles.listCardTitle, { flex: 1, marginTop: 0 }]} numberOfLines={1}>{item.title}</Text>
+            <TouchableOpacity onPress={() => handleToggleFavorite(item)} style={{ paddingLeft: 8 }}>
+              <Ionicons name={item.isFavorited ? 'heart' : 'heart-outline'} size={20} color={item.isFavorited ? '#EF4444' : AppColors.textMedium} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.listCardDesc} numberOfLines={2}>{item.description}</Text>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+            <Text style={styles.listCardPrice}>{item.price}</Text>
             <View style={[styles.typeBadgePill, { backgroundColor: badgeBg }]}>
               <Text style={[styles.typeBadgeText, { color: badgeTxtColor }]}>
                 {badgeLabel}
               </Text>
             </View>
-            <TouchableOpacity onPress={() => handleToggleFavorite(item)}>
-              <Ionicons name={item.isFavorited ? 'heart' : 'heart-outline'} size={20} color={item.isFavorited ? '#EF4444' : AppColors.textMedium} />
-            </TouchableOpacity>
           </View>
 
-          <Text style={styles.listCardTitle} numberOfLines={1}>{item.title}</Text>
-          <Text style={styles.listCardDesc} numberOfLines={2}>{item.description}</Text>
+          <TouchableOpacity
+            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}
+            onPress={() => {
+              if (item.isOrganization) {
+                (navigation as any).navigate('AssociationDetail', { associationId: item.organizationId });
+              } else if (item.userId) {
+                (navigation as any).navigate('Profile', { userId: item.userId });
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="person-circle-outline" size={13} color={AppColors.textMedium} style={{ marginRight: 4 }} />
+            <Text style={{ fontSize: 11, color: AppColors.textMedium }} numberOfLines={1}>Owner: {item.seller}</Text>
+          </TouchableOpacity>
 
-          <View style={styles.listCardFooter}>
-            <Text style={styles.listCardPrice}>{item.price}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.listCardSeller} numberOfLines={1}><Ionicons name="person-circle-outline" size={13} /> {item.seller}</Text>
-              <TouchableOpacity style={styles.cardChatBtnPill} onPress={() => handleOpenContact(item)}>
-                <Ionicons name="chatbubbles" size={12} color={AppColors.primary} />
-                <Text style={styles.cardChatBtnText}>Chat</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <TouchableOpacity style={styles.cardChatBtnPillVertical} onPress={() => handleOpenContact(item)}>
+            <Ionicons name="chatbubbles" size={12} color={AppColors.primary} style={{ marginRight: 4 }} />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: AppColors.primary }}>Chat with Owner</Text>
+          </TouchableOpacity>
         </View>
       </TouchableOpacity>
     );
@@ -1012,7 +1284,9 @@ export const EcoMarketScreen = () => {
 
   const renderWorkshopCard = ({ item }: { item: WorkshopItem }) => (
     <View style={styles.workshopCard}>
-      <Image source={{ uri: item.image }} style={styles.workshopImg} />
+      {item.image ? (
+        <Image source={{ uri: item.image }} style={styles.workshopImg} />
+      ) : null}
       <View style={styles.workshopBody}>
         <Text style={styles.workshopHost}>{item.host}</Text>
         <Text style={styles.workshopTitle}>{item.title}</Text>
@@ -1031,11 +1305,18 @@ export const EcoMarketScreen = () => {
     </View>
   );
 
-  const getFilteredItems = () => {
-    return itemsList.filter(item =>
-      item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.description.toLowerCase().includes(searchQuery.toLowerCase())
+  const renderListFooter = () => {
+    if (!loadingMoreMarket) return null;
+    return (
+      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+        <ActivityIndicator color={AppColors.primary} size="small" />
+        <Text style={{ fontSize: 12, color: AppColors.textMedium, marginTop: 6 }}>Loading more eco listings...</Text>
+      </View>
     );
+  };
+
+  const getFilteredItems = () => {
+    return itemsList;
   };
 
   const favoritedItems = itemsList.filter(item => item.isFavorited);
@@ -1047,7 +1328,7 @@ export const EcoMarketScreen = () => {
 
   return (
     <View style={styles.container}>
-      {/* ── Top Header Bar ── */}
+      {/* â”€â”€ Top Header Bar â”€â”€ */}
       <Animated.View
         style={[
           styles.header,
@@ -1060,21 +1341,45 @@ export const EcoMarketScreen = () => {
             paddingTop: insets.top,
             height: 60 + insets.top,
             transform: [{ translateY: headerTranslateY }],
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 16,
           },
         ]}
       >
-        <TouchableOpacity style={styles.headerIconBtn} onPress={() => setCategoryDrawerVisible(true)}>
-          <Ionicons name="options-outline" size={22} color={AppColors.primary} />
-          {selectedCategoryIds.length > 0 && <View style={styles.categoryDotBadge} />}
-        </TouchableOpacity>
-
-        <Text style={styles.headerTitle}>Eco Marketplace</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Image
+            source={{
+              uri: resolveMediaUrl(user?.profileImage || user?.avatarUrl) || 'https://lh3.googleusercontent.com/aida-public/AB6AXuD902TkYI0b6_KRKtnLv9ekUyPn_e1-iyS3F9Mt8-jOxUbE_1FI8UooP95XuIbGDhFd1ELMSlDE4LDvXawkcdg80li_VvGAmUAAb22zzMsqO98JD_YzW5TxohR_wEZEphVly-CeasRgVMSsXhkjHccqEHuB9C3XhNA0C8_32DACGAIVUOl4vxTVhCoGxybxC9Zl-Wq93MJxUJRYk6jV_9VbWczwGRwpix7oGK86KoEx2-VlgW9qO4k2',
+            }}
+            style={{ width: 32, height: 32, borderRadius: 16 }}
+          />
+          <Text style={{ fontSize: 20, fontWeight: '700', color: '#006D40' }}>Ekenox</Text>
+        </View>
 
         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={() => setCategoryDrawerVisible(true)}>
+            <Ionicons name="options-outline" size={22} color={AppColors.primary} />
+            {selectedCategoryIds.length > 0 && <View style={styles.categoryDotBadge} />}
+          </TouchableOpacity>
+
+          {/* Search Icon Toggle */}
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => {
+              if (showSearch) { setShowSearch(false); setSearchQuery(''); }
+              else setShowSearch(true);
+            }}
+          >
+            <Ionicons name={showSearch ? 'close' : 'search-outline'} size={22} color={AppColors.primary} />
+          </TouchableOpacity>
+
           {/* Create Item Button */}
           <TouchableOpacity
             style={styles.headerIconBtn}
             onPress={() => {
+              resetForm();
               setCreateItemType(activeMainTab === 'products' ? productSubTab : activeMainTab === 'repair' ? repairSubTab : activeMainTab === 'swap' ? 'swap' : 'workshop');
               setCreateModalVisible(true);
             }}
@@ -1100,7 +1405,7 @@ export const EcoMarketScreen = () => {
         </View>
       </Animated.View>
 
-      {/* ── Sticky Top Navigation & Search ── */}
+      {/* â”€â”€ Sticky Top Navigation & Search â”€â”€ */}
       <Animated.View
         style={{
           position: 'absolute',
@@ -1186,7 +1491,7 @@ export const EcoMarketScreen = () => {
         )}
 
         {/* Search Bar */}
-        {activeMainTab !== 'workshops' && (
+        {showSearch && activeMainTab !== 'workshops' && (
           <View style={styles.searchSection}>
             <View style={styles.searchBox}>
               <Ionicons name="search" size={18} color={AppColors.textMedium} style={{ marginRight: 8 }} />
@@ -1196,6 +1501,7 @@ export const EcoMarketScreen = () => {
                 style={styles.searchInput}
                 value={searchQuery}
                 onChangeText={setSearchQuery}
+                autoFocus
               />
               {searchQuery !== '' && (
                 <TouchableOpacity onPress={() => setSearchQuery('')}>
@@ -1207,7 +1513,7 @@ export const EcoMarketScreen = () => {
         )}
       </Animated.View>
 
-      {/* ── Content View ── */}
+      {/* â”€â”€ Content View â”€â”€ */}
       {isLoadingApi ? (
         <View style={{ paddingTop: 60 + insets.top + (activeMainTab === 'products' || activeMainTab === 'repair' ? 140 : 100) }}>
           {activeMainTab === 'products' ? renderSkeletonGrid() : renderSkeletonList()}
@@ -1215,7 +1521,7 @@ export const EcoMarketScreen = () => {
       ) : activeMainTab === 'products' ? (
         <Animated.FlatList
           key={`grid-products-${productSubTab}`}
-          data={getFilteredItems()}
+          data={itemsList}
           renderItem={renderGridCard}
           keyExtractor={item => String(item.id)}
           numColumns={2}
@@ -1223,6 +1529,9 @@ export const EcoMarketScreen = () => {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} />}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
           scrollEventThrottle={16}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={renderListFooter}
         />
       ) : activeMainTab === 'workshops' ? (
         <Animated.FlatList
@@ -1234,21 +1543,27 @@ export const EcoMarketScreen = () => {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} />}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
           scrollEventThrottle={16}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={renderListFooter}
         />
       ) : (
         <Animated.FlatList
           key={`list-${activeMainTab}-${repairSubTab}`}
-          data={getFilteredItems()}
+          data={itemsList}
           renderItem={renderListCard}
           keyExtractor={item => String(item.id)}
           contentContainerStyle={[styles.listContent, { paddingTop: 60 + insets.top + 145 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} />}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
           scrollEventThrottle={16}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={renderListFooter}
         />
       )}
 
-      {/* ── Left Category Drawer Menu ── */}
+      {/* â”€â”€ Left Category Drawer Menu â”€â”€ */}
       <Modal visible={categoryDrawerVisible} animationType="slide" transparent onRequestClose={() => setCategoryDrawerVisible(false)}>
         <View style={styles.drawerOverlay}>
           <SafeAreaView style={styles.drawerContainer}>
@@ -1291,7 +1606,7 @@ export const EcoMarketScreen = () => {
         </View>
       </Modal>
 
-      {/* ── Favorites Screen View ── */}
+      {/* â”€â”€ Favorites Screen View â”€â”€ */}
       <Modal visible={favoritesScreenVisible} animationType="slide" transparent={false} onRequestClose={() => setFavoritesScreenVisible(false)}>
         <SafeAreaView style={styles.fullScreenContainer}>
           <View style={styles.fullScreenHeader}>
@@ -1320,140 +1635,528 @@ export const EcoMarketScreen = () => {
         </SafeAreaView>
       </Modal>
 
-      {/* ── Create Item Modal Screen ── */}
-      <Modal visible={createModalVisible} animationType="slide" transparent onRequestClose={() => setCreateModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { maxHeight: '95%' }]}>
-            <SafeAreaView style={{ flex: 1 }}>
-              <View style={styles.fullScreenHeader}>
-                <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
-                  <Ionicons name="close" size={24} color={AppColors.textDark} />
-                </TouchableOpacity>
-                <Text style={styles.fullScreenTitle}>Create Marketplace Listing</Text>
-                <View style={{ width: 24 }} />
+      {/* â”€â”€ Create Eco Listing Modal â”€â”€ */}
+      <Modal visible={createModalVisible} animationType="slide" transparent={false} onRequestClose={() => setCreateModalVisible(false)}>
+        <SafeAreaView style={styles.fullScreenContainer}>
+          {/* Header */}
+          <View style={styles.fullScreenHeader}>
+            <TouchableOpacity style={styles.fullScreenBackBtn} onPress={() => setCreateModalVisible(false)}>
+              <Ionicons name="close" size={24} color={AppColors.textDark} />
+            </TouchableOpacity>
+            <Text style={styles.fullScreenTitle}>Create Eco Listing</Text>
+            <View style={{ width: 38 }} />
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+
+            {/* Eco Banner for Free Items */}
+            {createItemType === 'free' && (
+              <View style={styles.ecoBannerBox}>
+                <Ionicons name="leaf" size={22} color="#15803D" />
+                <Text style={styles.ecoBannerText}>
+                  ðŸŒ± Giving items a second life reduces landfill waste and strengthens our community!
+                </Text>
+              </View>
+            )}
+
+            {/* â”€â”€ Section 1: Listing Type â”€â”€ */}
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>
+                <Ionicons name="pricetag-outline" size={16} color={AppColors.primary} /> Listing Type
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {[
+                  { id: 'for_sale', label: 'For Sale' },
+                  { id: 'free', label: 'Free Giveaway' },
+                  { id: 'swap', label: 'Swap Item' },
+                  { id: 'repair_request', label: 'Repair Request' },
+                  { id: 'repair_service', label: 'Repair Service' },
+                  { id: 'workshop', label: 'Workshop' },
+                ].map(t => (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[
+                      styles.categoryChip,
+                      { width: '31%', minWidth: 95, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, marginVertical: 2 },
+                      createItemType === t.id && styles.categoryChipActive
+                    ]}
+                    onPress={() => setCreateItemType(t.id as any)}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      style={[styles.categoryChipText, { fontSize: 12 }, createItemType === t.id && styles.categoryChipTextActive]}
+                    >
+                      {t.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* â”€â”€ Section 2: Basic Information â”€â”€ */}
+            <View style={[styles.sectionCard, { marginTop: 12 }]}>
+              <Text style={styles.sectionTitle}>
+                <Ionicons name="information-circle-outline" size={16} color={AppColors.primary} /> Basic Information
+              </Text>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>Title <Text style={{ color: AppColors.error }}>*</Text></Text>
+                <TextInput
+                  placeholder={createItemType === 'repair_service' ? 'e.g. Expert Phone Repair Service' : createItemType === 'workshop' ? 'e.g. Urban Composting Workshop' : 'e.g. Reusable Thermal Flask'}
+                  style={styles.input}
+                  value={formTitle}
+                  onChangeText={setFormTitle}
+                  placeholderTextColor={AppColors.textLight}
+                />
               </View>
 
-              <ScrollView style={{ padding: 16 }} showsVerticalScrollIndicator={false}>
-                {/* Eco Banner for Free Items */}
-                {createItemType === 'free' && (
-                  <View style={styles.ecoBannerBox}>
-                    <Ionicons name="leaf" size={22} color="#15803D" />
-                    <Text style={styles.ecoBannerText}>
-                      🌱 Giving items a second life reduces landfill waste and strengthens community bonds! Thank you for sharing.
-                    </Text>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.label}>Description <Text style={{ color: AppColors.error }}>*</Text></Text>
+                <TextInput
+                  placeholder="Describe your item, its condition, dimensions, story..."
+                  style={[styles.input, { height: 90, paddingTop: 10 }]}
+                  multiline
+                  value={formDescription}
+                  onChangeText={setFormDescription}
+                  placeholderTextColor={AppColors.textLight}
+                />
+              </View>
+
+              {/* Price */}
+              {(createItemType === 'for_sale' || createItemType === 'workshop') && (
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Price (â‚¬) {createItemType === 'for_sale' && <Text style={{ color: AppColors.error }}>*</Text>}</Text>
+                  <TextInput placeholder="e.g. 24.99" keyboardType="numeric" style={styles.input} value={formPrice} onChangeText={setFormPrice} placeholderTextColor={AppColors.textLight} />
+                </View>
+              )}
+
+              {createItemType === 'repair_service' && (
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Hourly Rate (â‚¬/hr)</Text>
+                  <TextInput placeholder="e.g. 25.00" keyboardType="numeric" style={styles.input} value={formHourlyRate} onChangeText={setFormHourlyRate} placeholderTextColor={AppColors.textLight} />
+                </View>
+              )}
+
+              {/* Condition */}
+              {['for_sale', 'free', 'swap', 'repair_request'].includes(createItemType) && (
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Condition</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 4 }}>
+                    {['new', 'used', 'refurbished'].map(c => (
+                      <TouchableOpacity
+                        key={c}
+                        style={[styles.categoryChip, formCondition === c && styles.categoryChipActive]}
+                        onPress={() => setFormCondition(c)}
+                      >
+                        <Text style={[styles.categoryChipText, formCondition === c && styles.categoryChipTextActive]}>
+                          {c.charAt(0).toUpperCase() + c.slice(1)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Brand & Model */}
+              {['for_sale', 'free', 'swap', 'repair_request'].includes(createItemType) && (
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <View style={[styles.fieldGroup, { flex: 1 }]}>
+                    <Text style={styles.label}>Brand</Text>
+                    <TextInput placeholder="e.g. Apple" style={styles.input} value={formBrand} onChangeText={setFormBrand} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={[styles.fieldGroup, { flex: 1 }]}>
+                    <Text style={styles.label}>Model</Text>
+                    <TextInput placeholder="e.g. iPhone 13" style={styles.input} value={formModel} onChangeText={setFormModel} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                </View>
+              )}
+
+              {/* Workshop-specific */}
+              {createItemType === 'workshop' && (
+                <>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Workshop Date</Text>
+                    <TextInput placeholder="e.g. 2026-08-15" style={styles.input} value={formWorkshopDate} onChangeText={setFormWorkshopDate} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Time Slot</Text>
+                    <TextInput placeholder="e.g. 14:00 â€“ 16:00" style={styles.input} value={formWorkshopTime} onChangeText={setFormWorkshopTime} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Available Spots</Text>
+                    <TextInput placeholder="e.g. 10" keyboardType="numeric" style={styles.input} value={formSpots} onChangeText={setFormSpots} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                </>
+              )}
+
+              {/* Repair service specific */}
+              {createItemType === 'repair_service' && (
+                <>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Experience</Text>
+                    <TextInput placeholder="e.g. 5 years in electronics repair" style={styles.input} value={formExperience} onChangeText={setFormExperience} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Specialties (comma-separated)</Text>
+                    <TextInput placeholder="e.g. Phones, Laptops, Audio" style={styles.input} value={formRepairSpecialties} onChangeText={setFormRepairSpecialties} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Service Area</Text>
+                    <TextInput placeholder="e.g. Paris 11e, ÃŽle-de-France" style={styles.input} value={formServiceAreaName} onChangeText={setFormServiceAreaName} placeholderTextColor={AppColors.textLight} />
+                  </View>
+                  <View style={styles.switchRow}>
+                    <View style={styles.switchInfo}>
+                      <Text style={styles.switchLabel}>Professional Repairer</Text>
+                      <Text style={styles.switchDesc}>Certified professional service provider.</Text>
+                    </View>
+                    <Switch value={formIsProfessional} onValueChange={setFormIsProfessional} trackColor={{ true: AppColors.primary }} />
+                  </View>
+                </>
+              )}
+
+              {/* Repair request specific */}
+              {createItemType === 'repair_request' && (
+                <>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={[styles.fieldGroup, { flex: 1 }]}>
+                      <Text style={styles.label}>Min Budget (â‚¬)</Text>
+                      <TextInput placeholder="e.g. 10.00" keyboardType="numeric" style={styles.input} value={formBudgetMin} onChangeText={setFormBudgetMin} placeholderTextColor={AppColors.textLight} />
+                    </View>
+                    <View style={[styles.fieldGroup, { flex: 1 }]}>
+                      <Text style={styles.label}>Max Budget (â‚¬)</Text>
+                      <TextInput placeholder="e.g. 50.00" keyboardType="numeric" style={styles.input} value={formBudgetMax} onChangeText={setFormBudgetMax} placeholderTextColor={AppColors.textLight} />
+                    </View>
+                  </View>
+                  <View style={styles.fieldGroup}>
+                    <Text style={styles.label}>Urgency</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 4 }}>
+                      {['low', 'medium', 'high', 'urgent'].map(u => (
+                        <TouchableOpacity
+                          key={u}
+                          style={[styles.categoryChip, formUrgency === u && styles.categoryChipActive]}
+                          onPress={() => setFormUrgency(u)}
+                        >
+                          <Text style={[styles.categoryChipText, formUrgency === u && styles.categoryChipTextActive]}>
+                            {u.charAt(0).toUpperCase() + u.slice(1)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                </>
+              )}
+            </View>
+
+            {/* â”€â”€ Section 3: Cover Image â”€â”€ */}
+            <View style={[styles.sectionCard, { marginTop: 12 }]}>
+              <Text style={styles.sectionTitle}>
+                <Ionicons name="images-outline" size={16} color={AppColors.primary} /> Listing Media
+              </Text>
+              <Text style={styles.label}>
+                Cover Photo {['for_sale', 'free', 'swap', 'repair_request'].includes(createItemType) ? <Text style={{ color: AppColors.error }}>*</Text> : '(Optional)'}
+              </Text>
+              <TouchableOpacity style={styles.coverPickerBox} onPress={pickMarketplaceImage}>
+                {formImageUrl ? (
+                  <Image source={{ uri: formImageUrl }} style={styles.coverPreview} />
+                ) : (
+                  <View style={styles.coverPickerPlaceholder}>
+                    <Ionicons name="cloud-upload-outline" size={36} color={AppColors.textMedium} />
+                    <Text style={styles.coverPickerText}>Tap to select a photo from gallery</Text>
+                    <Text style={[styles.coverPickerText, { fontSize: 11, marginTop: 2, opacity: 0.6 }]}>JPG / PNG Â· 4:3 recommended</Text>
                   </View>
                 )}
+                <View style={styles.coverPickerOverlay}>
+                  <Ionicons name="camera" size={18} color="white" />
+                </View>
+              </TouchableOpacity>
+            </View>
 
-                <Text style={styles.sectionLabel}>Listing Type</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-                  {[
-                    { id: 'for_sale', label: 'For Sale' },
-                    { id: 'free', label: 'Free Giveaway' },
-                    { id: 'swap', label: 'Swap Item' },
-                    { id: 'repair_request', label: 'Repair Demande' },
-                    { id: 'repair_service', label: 'Repair Offer' },
-                    { id: 'workshop', label: 'Workshop' },
-                  ].map(t => (
-                    <TouchableOpacity
-                      key={t.id}
-                      style={[styles.subTabPill, createItemType === t.id && styles.subTabPillActive]}
-                      onPress={() => setCreateItemType(t.id as any)}
-                    >
-                      <Text style={[styles.subTabText, createItemType === t.id && styles.subTabTextActive]}>{t.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-
-                <Text style={styles.inputLabel}>Title *</Text>
-                <TextInput placeholder="Listing Title" style={styles.modalInput} value={formTitle} onChangeText={setFormTitle} />
-
-                {createItemType === 'for_sale' && (
-                  <>
-                    <Text style={styles.inputLabel}>Price ($) *</Text>
-                    <TextInput placeholder="24.99" keyboardType="numeric" style={styles.modalInput} value={formPrice} onChangeText={setFormPrice} />
-                  </>
-                )}
-
-                {createItemType === 'workshop' && (
-                  <>
-                    <Text style={styles.inputLabel}>Price (0 for Free)</Text>
-                    <TextInput placeholder="0.00" keyboardType="numeric" style={styles.modalInput} value={formPrice} onChangeText={setFormPrice} />
-                    <Text style={styles.inputLabel}>Date (e.g. June 15, 2026)</Text>
-                    <TextInput placeholder="June 15, 2026" style={styles.modalInput} value={formWorkshopDate} onChangeText={setFormWorkshopDate} />
-                    <Text style={styles.inputLabel}>Time (e.g. 14:00 - 16:00)</Text>
-                    <TextInput placeholder="14:00 - 16:00" style={styles.modalInput} value={formWorkshopTime} onChangeText={setFormWorkshopTime} />
-                    <Text style={styles.inputLabel}>Available Spots</Text>
-                    <TextInput placeholder="10" keyboardType="numeric" style={styles.modalInput} value={formSpots} onChangeText={setFormSpots} />
-                  </>
-                )}
-
-                {createItemType === 'repair_service' && (
-                  <>
-                    <Text style={styles.inputLabel}>Hourly Rate ($/hr)</Text>
-                    <TextInput placeholder="25.00" keyboardType="numeric" style={styles.modalInput} value={formHourlyRate} onChangeText={setFormHourlyRate} />
-                    <Text style={styles.inputLabel}>Experience (e.g. 5 years in electronics)</Text>
-                    <TextInput placeholder="5 years in electronics" style={styles.modalInput} value={formExperience} onChangeText={setFormExperience} />
-                    <Text style={styles.inputLabel}>Repair Specialties (comma-separated)</Text>
-                    <TextInput placeholder="Electronics, Soldering, Appliances" style={styles.modalInput} value={formRepairSpecialties} onChangeText={setFormRepairSpecialties} />
-                  </>
-                )}
-
-                {createItemType === 'repair_request' && (
-                  <>
-                    <Text style={styles.inputLabel}>Min Budget ($)</Text>
-                    <TextInput placeholder="10.00" keyboardType="numeric" style={styles.modalInput} value={formBudgetMin} onChangeText={setFormBudgetMin} />
-                    <Text style={styles.inputLabel}>Max Budget ($)</Text>
-                    <TextInput placeholder="50.00" keyboardType="numeric" style={styles.modalInput} value={formBudgetMax} onChangeText={setFormBudgetMax} />
-                  </>
-                )}
-
-                {createItemType === 'swap' && (
-                  <>
-                    <Text style={styles.inputLabel}>Swap Preferences (comma-separated)</Text>
-                    <TextInput placeholder="Books, Organic Seeds, Wooden Furniture" style={styles.modalInput} value={formSwapPref} onChangeText={setFormSwapPref} />
-                  </>
-                )}
-
-                <Text style={styles.inputLabel}>
-                  Image URL {['for_sale', 'free', 'swap', 'repair_request'].includes(createItemType) ? '*' : '(Optional)'}
+            {/* â”€â”€ Section 4: Location & Delivery â”€â”€ */}
+            {createItemType !== 'workshop' && (
+              <View style={[styles.sectionCard, { marginTop: 12 }]}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="map-outline" size={16} color={AppColors.primary} /> Location & Delivery
                 </Text>
-                <TextInput placeholder="https://images.unsplash.com/..." style={styles.modalInput} value={formImageUrl} onChangeText={setFormImageUrl} />
 
-                <Text style={styles.inputLabel}>Location Address</Text>
-                <TextInput placeholder="Paris Eco Hub, France" style={styles.modalInput} value={formLocation} onChangeText={setFormLocation} />
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Location Address</Text>
+                  <TextInput placeholder="e.g. Paris Eco Hub, France" style={styles.input} value={formLocation} onChangeText={setFormLocation} placeholderTextColor={AppColors.textLight} />
+                </View>
 
-                <Text style={styles.inputLabel}>Description</Text>
-                <TextInput placeholder="Detailed description..." style={[styles.modalInput, { height: 70 }]} multiline value={formDescription} onChangeText={setFormDescription} />
+                <View style={styles.switchRow}>
+                  <View style={styles.switchInfo}>
+                    <Text style={styles.switchLabel}>Local Pickup</Text>
+                    <Text style={styles.switchDesc}>Buyers can collect directly from you.</Text>
+                  </View>
+                  <Switch value={formHasPickup} onValueChange={setFormHasPickup} trackColor={{ true: AppColors.primary }} />
+                </View>
 
-                {/* Fulfillment Options */}
-                {createItemType !== 'workshop' && (
-                  <View style={{ marginVertical: 10 }}>
-                    <Text style={styles.sectionLabel}>Fulfillment Options</Text>
-                    <View style={styles.switchRow}>
-                      <Text style={styles.switchLabel}>In-Store / Local Pickup</Text>
-                      <Switch value={formHasPickup} onValueChange={setFormHasPickup} trackColor={{ true: AppColors.primary }} />
-                    </View>
-                    <View style={styles.switchRow}>
-                      <Text style={styles.switchLabel}>Eco Bicycle Delivery</Text>
-                      <Switch value={formHasBicycle} onValueChange={setFormHasBicycle} trackColor={{ true: AppColors.primary }} />
-                    </View>
-                    <View style={styles.switchRow}>
-                      <Text style={styles.switchLabel}>Standard Shipping</Text>
-                      <Switch value={formHasShipping} onValueChange={setFormHasShipping} trackColor={{ true: AppColors.primary }} />
-                    </View>
+                <View style={[styles.switchRow, { marginTop: 14 }]}>
+                  <View style={styles.switchInfo}>
+                    <Text style={styles.switchLabel}>Eco Bicycle Delivery</Text>
+                    <Text style={styles.switchDesc}>Eco-friendly courier within local zones.</Text>
+                  </View>
+                  <Switch value={formHasBicycle} onValueChange={setFormHasBicycle} trackColor={{ true: AppColors.primary }} />
+                </View>
+
+                <View style={[styles.switchRow, { marginTop: 14 }]}>
+                  <View style={styles.switchInfo}>
+                    <Text style={styles.switchLabel}>Standard Shipping</Text>
+                    <Text style={styles.switchDesc}>Ship items nationally or internationally.</Text>
+                  </View>
+                  <Switch value={formHasShipping} onValueChange={setFormHasShipping} trackColor={{ true: AppColors.primary }} />
+                </View>
+              </View>
+            )}
+
+            {/* â”€â”€ Section 5: Swap Details â”€â”€ */}
+            {createItemType === 'swap' && (
+              <View style={[styles.sectionCard, { marginTop: 12 }]}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="swap-horizontal-outline" size={16} color={AppColors.primary} /> Swap Details
+                </Text>
+
+                <Text style={styles.label}>What are you offering?</Text>
+                <View style={styles.inputRow}>
+                  <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={swapItemInput} onChangeText={setSwapItemInput} placeholder="e.g. Wooden bookshelf" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addSwapItem(swapItemInput)} returnKeyType="done" />
+                  <TouchableOpacity style={styles.addBtn} onPress={() => addSwapItem(swapItemInput)}>
+                    <Ionicons name="add" size={22} color="white" />
+                  </TouchableOpacity>
+                </View>
+                {formSwapItemsList.length > 0 && (
+                  <View style={styles.tagsList}>
+                    {formSwapItemsList.map(item => (
+                      <View key={item} style={styles.tag}>
+                        <Text style={styles.tagText}>{item}</Text>
+                        <TouchableOpacity onPress={() => removeSwapItem(item)} style={styles.tagRemove}>
+                          <Ionicons name="close" size={14} color={AppColors.primary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
                   </View>
                 )}
 
-                <TouchableOpacity style={[styles.mainActionBtn, { marginTop: 16, marginBottom: 40 }]} onPress={handleCreateSubmit} disabled={isSubmittingCreate}>
-                  <Text style={styles.mainActionBtnText}>{isSubmittingCreate ? 'Publishing...' : 'Publish Listing'}</Text>
+                <Text style={[styles.label, { marginTop: 12 }]}>What would you accept in return?</Text>
+                <View style={styles.inputRow}>
+                  <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={swapPreferenceInput} onChangeText={setSwapPreferenceInput} placeholder="e.g. Books, Toys, Seeds" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addSwapPreference(swapPreferenceInput)} returnKeyType="done" />
+                  <TouchableOpacity style={styles.addBtn} onPress={() => addSwapPreference(swapPreferenceInput)}>
+                    <Ionicons name="add" size={22} color="white" />
+                  </TouchableOpacity>
+                </View>
+                {formSwapPreferencesList.length > 0 && (
+                  <View style={styles.tagsList}>
+                    {formSwapPreferencesList.map(pref => (
+                      <View key={pref} style={styles.tag}>
+                        <Text style={styles.tagText}>{pref}</Text>
+                        <TouchableOpacity onPress={() => removeSwapPreference(pref)} style={styles.tagRemove}>
+                          <Ionicons name="close" size={14} color={AppColors.primary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* â”€â”€ Section 6: Product Details (colors, key features, care) â”€â”€ */}
+            {['for_sale', 'free', 'swap'].includes(createItemType) && (
+              <View style={[styles.sectionCard, { marginTop: 12 }]}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="list-outline" size={16} color={AppColors.primary} /> Product Details
+                </Text>
+
+                {/* Colors */}
+                <Text style={styles.label}>Colors Available</Text>
+                <View style={styles.inputRow}>
+                  <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={colorInput} onChangeText={setColorInput} placeholder="e.g. Forest Green" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addColor(colorInput)} returnKeyType="done" />
+                  <TouchableOpacity style={styles.addBtn} onPress={() => addColor(colorInput)}>
+                    <Ionicons name="add" size={22} color="white" />
+                  </TouchableOpacity>
+                </View>
+                {formColorsList.length > 0 && (
+                  <View style={styles.tagsList}>
+                    {formColorsList.map(c => (
+                      <View key={c} style={styles.tag}>
+                        <Text style={styles.tagText}>{c}</Text>
+                        <TouchableOpacity onPress={() => removeColor(c)} style={styles.tagRemove}>
+                          <Ionicons name="close" size={14} color={AppColors.primary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Key Features */}
+                <Text style={[styles.label, { marginTop: 12 }]}>Key Features</Text>
+                <View style={styles.inputRow}>
+                  <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={keyFeatureInput} onChangeText={setKeyFeatureInput} placeholder="e.g. BPA-free, stainless steel" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addKeyFeature(keyFeatureInput)} returnKeyType="done" />
+                  <TouchableOpacity style={styles.addBtn} onPress={() => addKeyFeature(keyFeatureInput)}>
+                    <Ionicons name="add" size={22} color="white" />
+                  </TouchableOpacity>
+                </View>
+                {formKeyFeatures.length > 0 && (
+                  <View style={styles.tagsList}>
+                    {formKeyFeatures.map(f => (
+                      <View key={f} style={styles.tag}>
+                        <Text style={styles.tagText}>{f}</Text>
+                        <TouchableOpacity onPress={() => removeKeyFeature(f)} style={styles.tagRemove}>
+                          <Ionicons name="close" size={14} color={AppColors.primary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Care Instructions */}
+                <Text style={[styles.label, { marginTop: 12 }]}>Care Instructions</Text>
+                <View style={styles.inputRow}>
+                  <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={careInstructionInput} onChangeText={setCareInstructionInput} placeholder="e.g. Hand wash only" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addCareInstruction(careInstructionInput)} returnKeyType="done" />
+                  <TouchableOpacity style={styles.addBtn} onPress={() => addCareInstruction(careInstructionInput)}>
+                    <Ionicons name="add" size={22} color="white" />
+                  </TouchableOpacity>
+                </View>
+                {formCareInstructions.length > 0 && (
+                  <View style={styles.tagsList}>
+                    {formCareInstructions.map(ci => (
+                      <View key={ci} style={styles.tag}>
+                        <Text style={styles.tagText}>{ci}</Text>
+                        <TouchableOpacity onPress={() => removeCareInstruction(ci)} style={styles.tagRemove}>
+                          <Ionicons name="close" size={14} color={AppColors.primary} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* â”€â”€ Section 7: Eco Impact & Story â”€â”€ */}
+            {createItemType !== 'workshop' && (
+              <View style={[styles.sectionCard, { marginTop: 12 }]}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="leaf-outline" size={16} color={AppColors.primary} /> Eco Impact & Story
+                </Text>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Sustainability Commitment</Text>
+                  <TextInput placeholder="e.g. This item was made from 100% recycled materials..." style={[styles.input, { height: 75, paddingTop: 10 }]} multiline value={formSustainabilityCommitment} onChangeText={setFormSustainabilityCommitment} placeholderTextColor={AppColors.textLight} />
+                </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Story of Change</Text>
+                  <TextInput placeholder="Share the journey of this item â€” its second life..." style={[styles.input, { height: 75, paddingTop: 10 }]} multiline value={formStoryOfChange} onChangeText={setFormStoryOfChange} placeholderTextColor={AppColors.textLight} />
+                </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Community Impact</Text>
+                  <TextInput placeholder="How does listing this help the local community?" style={[styles.input, { height: 75, paddingTop: 10 }]} multiline value={formCommunityImpact} onChangeText={setFormCommunityImpact} placeholderTextColor={AppColors.textLight} />
+                </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>Eco Impact Score (0â€“100)</Text>
+                  <TextInput placeholder="e.g. 85" keyboardType="numeric" style={styles.input} value={formEcoImpactScore} onChangeText={setFormEcoImpactScore} placeholderTextColor={AppColors.textLight} />
+                </View>
+              </View>
+            )}
+
+            {/* â”€â”€ Section 8: Tags â”€â”€ */}
+            <View style={[styles.sectionCard, { marginTop: 12 }]}>
+              <Text style={styles.sectionTitle}>
+                <Ionicons name="pricetags-outline" size={16} color={AppColors.primary} /> Tags
+              </Text>
+              <View style={styles.inputRow}>
+                <TextInput style={[styles.input, { flex: 1, marginRight: 8 }]} value={tagInput} onChangeText={setTagInput} placeholder="e.g. eco, vintage, upcycled" placeholderTextColor={AppColors.textLight} onSubmitEditing={() => addTag(tagInput)} returnKeyType="done" />
+                <TouchableOpacity style={styles.addBtn} onPress={() => addTag(tagInput)}>
+                  <Ionicons name="add" size={22} color="white" />
                 </TouchableOpacity>
-              </ScrollView>
-            </SafeAreaView>
-          </View>
-        </View>
+              </View>
+              {formTags.length > 0 && (
+                <View style={styles.tagsList}>
+                  {formTags.map(tag => (
+                    <View key={tag} style={styles.tag}>
+                      <Text style={styles.tagText}>#{tag}</Text>
+                      <TouchableOpacity onPress={() => removeTag(tag)} style={styles.tagRemove}>
+                        <Ionicons name="close" size={14} color={AppColors.primary} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* ── Section: Listing Settings ── */}
+            {createItemType !== 'workshop' && (
+              <View style={[styles.sectionCard, { marginTop: 12 }]}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="settings-outline" size={16} color={AppColors.primary} /> Listing Settings
+                </Text>
+
+                <View style={styles.switchRow}>
+                  <View style={styles.switchInfo}>
+                    <Text style={styles.switchLabel}>Allow Comments</Text>
+                    <Text style={styles.switchDesc}>Enable users to leave questions on this listing.</Text>
+                  </View>
+                  <Switch value={formAllowComments} onValueChange={setFormAllowComments} trackColor={{ true: AppColors.primary }} />
+                </View>
+
+                <View style={[styles.switchRow, { marginTop: 14 }]}>
+                  <View style={styles.switchInfo}>
+                    <Text style={styles.switchLabel}>Allow Reviews</Text>
+                    <Text style={styles.switchDesc}>Enable ratings and feedback on this listing.</Text>
+                  </View>
+                  <Switch value={formAllowReviews} onValueChange={setFormAllowReviews} trackColor={{ true: AppColors.primary }} />
+                </View>
+
+                {formAllowReviews && (
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={styles.label}>Who can review?</Text>
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                      <TouchableOpacity
+                        style={[
+                          styles.categoryChip,
+                          formReviewsRestriction === 'anyone' && styles.categoryChipActive
+                        ]}
+                        onPress={() => setFormReviewsRestriction('anyone')}
+                      >
+                        <Text style={[
+                          styles.categoryChipText,
+                          formReviewsRestriction === 'anyone' && styles.categoryChipTextActive
+                        ]}>Anyone</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.categoryChip,
+                          formReviewsRestriction === 'buyers' && styles.categoryChipActive
+                        ]}
+                        onPress={() => setFormReviewsRestriction('buyers')}
+                      >
+                        <Text style={[
+                          styles.categoryChipText,
+                          formReviewsRestriction === 'buyers' && styles.categoryChipTextActive
+                        ]}>Only Buyers / Serviced Users</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* â”€â”€ Publish Button â”€â”€ */}
+            <TouchableOpacity style={[styles.createBtn, { marginTop: 20 }]} onPress={handleCreateSubmit} disabled={isSubmittingCreate}>
+              {isSubmittingCreate ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <Text style={styles.createBtnText}>Publish Listing</Text>
+              )}
+            </TouchableOpacity>
+
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
 
-      {/* ── Full Screen Item Details View ── */}
+
+      {/* â”€â”€ Full Screen Item Details View â”€â”€ */}
       <Modal visible={fullDetailVisible} animationType="slide" transparent={false} onRequestClose={() => setFullDetailVisible(false)}>
         {selectedItem && (
           <SafeAreaView style={styles.fullScreenContainer}>
@@ -1465,7 +2168,22 @@ export const EcoMarketScreen = () => {
 
               <Text style={styles.fullScreenTitle} numberOfLines={1}>Item Details</Text>
 
-              <View style={{ flexDirection: 'row', gap: 12 }}>
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                {(user && (String(user.id) === String(selectedItem.userId) || user.roles?.includes('ROLE_ADMIN'))) && (
+                  <>
+                    <TouchableOpacity onPress={() => {
+                      populateFormForEdit(selectedItem);
+                      setFullDetailVisible(false);
+                      setCreateModalVisible(true);
+                    }}>
+                      <Ionicons name="create-outline" size={22} color={AppColors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => handleDeleteItem(selectedItem)}>
+                      <Ionicons name="trash-outline" size={22} color="#EF4444" />
+                    </TouchableOpacity>
+                  </>
+                )}
+
                 <TouchableOpacity onPress={() => Alert.alert('Share', `Sharing link for "${selectedItem.title}"`)}>
                   <Ionicons name="share-social-outline" size={22} color={AppColors.textDark} />
                 </TouchableOpacity>
@@ -1528,39 +2246,52 @@ export const EcoMarketScreen = () => {
                   <Text style={styles.sectionTitleText}>Seller & Organization Profile</Text>
                 </View>
                 <View style={styles.sellerBox}>
-                  {selectedItem.isOrganization ? (
-                    <View style={styles.sellerAvatarHolder}>
-                      {selectedItem.organizationLogo ? (
-                        <Image source={{ uri: selectedItem.organizationLogo }} style={styles.sellerAvatar} />
-                      ) : (
-                        <Ionicons name="business" size={26} color={AppColors.primary} />
-                      )}
-                    </View>
-                  ) : (
-                    <View style={styles.sellerAvatarHolder}>
-                      {selectedItem.sellerAvatar ? (
-                        <Image source={{ uri: selectedItem.sellerAvatar }} style={styles.sellerAvatar} />
-                      ) : (
-                        <Ionicons name="person-circle" size={32} color={AppColors.primary} />
-                      )}
-                    </View>
-                  )}
-
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.sellerName}>{selectedItem.seller}</Text>
-                    <Text style={styles.sellerType}>{selectedItem.isOrganization ? 'Verified Eco Association' : 'Individual Community Member'}</Text>
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                    onPress={() => {
+                      if (selectedItem.isOrganization) {
+                        (navigation as any).navigate('AssociationDetail', { associationId: selectedItem.organizationId });
+                      } else if (selectedItem.userId) {
+                        (navigation as any).navigate('Profile', { userId: selectedItem.userId });
+                      }
+                      setFullDetailVisible(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
                     {selectedItem.isOrganization ? (
-                      <>
-                        {Boolean(selectedItem.organizationEmail) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 2 }}>✉️ {selectedItem.organizationEmail}</Text>}
-                        {Boolean(selectedItem.organizationWebsite) && <Text style={{ fontSize: 11, color: AppColors.primary, marginTop: 1 }}>🌐 {selectedItem.organizationWebsite}</Text>}
-                      </>
+                      <View style={styles.sellerAvatarHolder}>
+                        {selectedItem.organizationLogo ? (
+                          <Image source={{ uri: selectedItem.organizationLogo }} style={styles.sellerAvatar} />
+                        ) : (
+                          <Ionicons name="business" size={26} color={AppColors.primary} />
+                        )}
+                      </View>
                     ) : (
-                      <>
-                        {Boolean(selectedItem.userEmail) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 2 }}>✉️ {selectedItem.userEmail}</Text>}
-                        {Boolean(selectedItem.userPseudo) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 1 }}>@{selectedItem.userPseudo}</Text>}
-                      </>
+                      <View style={styles.sellerAvatarHolder}>
+                        {selectedItem.sellerAvatar ? (
+                          <Image source={{ uri: selectedItem.sellerAvatar }} style={styles.sellerAvatar} />
+                        ) : (
+                          <Ionicons name="person-circle" size={32} color={AppColors.primary} />
+                        )}
+                      </View>
                     )}
-                  </View>
+
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.sellerName}>{selectedItem.seller}</Text>
+                      <Text style={styles.sellerType}>{selectedItem.isOrganization ? 'Verified Eco Association' : 'Individual Community Member'}</Text>
+                      {selectedItem.isOrganization ? (
+                        <>
+                          {Boolean(selectedItem.organizationEmail) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 2 }}>Email: {selectedItem.organizationEmail}</Text>}
+                          {Boolean(selectedItem.organizationWebsite) && <Text style={{ fontSize: 11, color: AppColors.primary, marginTop: 1 }}>Website:{selectedItem.organizationWebsite}</Text>}
+                        </>
+                      ) : (
+                        <>
+                          {Boolean(selectedItem.userEmail) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 2 }}>Email: {selectedItem.userEmail}</Text>}
+                          {Boolean(selectedItem.userPseudo) && <Text style={{ fontSize: 11, color: AppColors.textMedium, marginTop: 1 }}>@{selectedItem.userPseudo}</Text>}
+                        </>
+                      )}
+                    </View>
+                  </TouchableOpacity>
 
                   <TouchableOpacity style={styles.contactSellerBtn} onPress={() => handleOpenContact(selectedItem)}>
                     <Text style={styles.contactSellerBtnText}>Contact</Text>
@@ -1744,7 +2475,7 @@ export const EcoMarketScreen = () => {
                       <View key={idx} style={styles.reviewCard}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Text style={styles.reviewerName}>{rev.user?.full_name || 'Eco Member'}</Text>
-                          <Text style={styles.reviewRating}>★ {rev.rating}/5</Text>
+                          <Text style={styles.reviewRating}>â˜… {rev.rating}/5</Text>
                         </View>
                         <Text style={styles.reviewComment}>{rev.comment}</Text>
                       </View>
@@ -1810,305 +2541,7 @@ export const EcoMarketScreen = () => {
         )}
       </Modal>
 
-      {/* ── Create Listing Modal (Full Page) ── */}
-      <Modal visible={createModalVisible} animationType="slide" transparent={false} onRequestClose={() => setCreateModalVisible(false)}>
-        <SafeAreaView style={styles.fullScreenContainer}>
-          {/* Header */}
-          <View style={styles.fullScreenHeader}>
-            <TouchableOpacity style={styles.fullScreenBackBtn} onPress={() => setCreateModalVisible(false)}>
-              <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
-            </TouchableOpacity>
-            <Text style={styles.fullScreenTitle}>Create Eco Listing</Text>
-            <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
-              <Ionicons name="close" size={22} color={AppColors.textDark} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, paddingBottom: 50 }}>
-            {/* Type Pills Selector */}
-            <Text style={styles.sectionLabel}>SELECT LISTING TYPE</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {[
-                  { id: 'for_sale', label: 'For Sale 🏷️' },
-                  { id: 'free', label: 'Free Giveaway 🎁' },
-                  { id: 'swap', label: 'Swap / Trade 🔄' },
-                  { id: 'repair_request', label: 'Repair Demande 🛠️' },
-                  { id: 'repair_service', label: 'Repair Offer 🧑‍🔧' },
-                  { id: 'workshop', label: 'Workshop 🎓' },
-                ].map(t => (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[
-                      styles.infoPillBox,
-                      createItemType === t.id && { backgroundColor: AppColors.primary },
-                      { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 }
-                    ]}
-                    onPress={() => setCreateItemType(t.id as any)}
-                  >
-                    <Text style={[styles.infoPillText, createItemType === t.id && { color: 'white', fontWeight: '800' }]}>
-                      {t.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-
-            {/* Eco Encouragement Banner for Free / Swap */}
-            {createItemType === 'free' && (
-              <View style={styles.ecoBannerBox}>
-                <Ionicons name="leaf" size={20} color="#15803D" />
-                <Text style={styles.ecoBannerText}>
-                  Giving away items for free builds community trust and keeps pre-loved goods out of landfills! 🌿
-                </Text>
-              </View>
-            )}
-
-            {createItemType === 'swap' && (
-              <View style={styles.ecoBannerBox}>
-                <Ionicons name="swap-horizontal" size={20} color="#15803D" />
-                <Text style={styles.ecoBannerText}>
-                  Direct item swaps promote a circular economy with zero waste! 🔁
-                </Text>
-              </View>
-            )}
-
-            {/* Title */}
-            <Text style={styles.inputLabel}>Listing Title *</Text>
-            <TextInput
-              placeholder="e.g. Vintage Leather Jacket, Solar Power Bank"
-              placeholderTextColor={AppColors.textMedium}
-              style={styles.modalInput}
-              value={formTitle}
-              onChangeText={setFormTitle}
-            />
-
-            {/* Price (if applicable) */}
-            {['for_sale', 'repair_service', 'workshop'].includes(createItemType) && (
-              <>
-                <Text style={styles.inputLabel}>
-                  {createItemType === 'repair_service' ? 'Service Rate / Price ($)' : 'Price ($) *'}
-                </Text>
-                <TextInput
-                  placeholder="0.00"
-                  placeholderTextColor={AppColors.textMedium}
-                  keyboardType="numeric"
-                  style={styles.modalInput}
-                  value={formPrice}
-                  onChangeText={setFormPrice}
-                />
-              </>
-            )}
-
-            {/* Description */}
-            <Text style={styles.inputLabel}>Description</Text>
-            <TextInput
-              placeholder="Describe your item, specifications, condition or details..."
-              placeholderTextColor={AppColors.textMedium}
-              style={[styles.modalInput, { height: 85 }]}
-              multiline
-              value={formDescription}
-              onChangeText={setFormDescription}
-            />
-
-            {/* Condition (for products & swap) */}
-            {['for_sale', 'free', 'swap'].includes(createItemType) && (
-              <>
-                <Text style={styles.inputLabel}>Condition</Text>
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                  {['New', 'Like New', 'Good', 'Fair'].map(cond => (
-                    <TouchableOpacity
-                      key={cond}
-                      style={[
-                        styles.infoPillBox,
-                        formCondition === cond && { backgroundColor: AppColors.primary },
-                        { paddingHorizontal: 14, paddingVertical: 8 }
-                      ]}
-                      onPress={() => setFormCondition(cond)}
-                    >
-                      <Text style={[styles.infoPillText, formCondition === cond && { color: 'white', fontWeight: '700' }]}>
-                        {cond}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            )}
-
-            {/* Swap Preferences (if Swap) */}
-            {createItemType === 'swap' && (
-              <>
-                <Text style={styles.inputLabel}>Swap Preferences (comma separated)</Text>
-                <TextInput
-                  placeholder="e.g. Eco Coffee Maker, Wooden Chair, Plant Pots"
-                  placeholderTextColor={AppColors.textMedium}
-                  style={styles.modalInput}
-                  value={formSwapPref}
-                  onChangeText={setFormSwapPref}
-                />
-              </>
-            )}
-
-            {/* Repair Demande Fields */}
-            {createItemType === 'repair_request' && (
-              <>
-                <Text style={styles.inputLabel}>Budget Range ($ Min - $ Max)</Text>
-                <View style={{ flexDirection: 'row', gap: 10 }}>
-                  <TextInput
-                    placeholder="Min $"
-                    placeholderTextColor={AppColors.textMedium}
-                    keyboardType="numeric"
-                    style={[styles.modalInput, { flex: 1 }]}
-                    value={formBudgetMin}
-                    onChangeText={setFormBudgetMin}
-                  />
-                  <TextInput
-                    placeholder="Max $"
-                    placeholderTextColor={AppColors.textMedium}
-                    keyboardType="numeric"
-                    style={[styles.modalInput, { flex: 1 }]}
-                    value={formBudgetMax}
-                    onChangeText={setFormBudgetMax}
-                  />
-                </View>
-
-                <Text style={styles.inputLabel}>Urgency Level</Text>
-                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                  {['low', 'medium', 'high', 'urgent'].map(urg => (
-                    <TouchableOpacity
-                      key={urg}
-                      style={[
-                        styles.infoPillBox,
-                        formUrgency === urg && { backgroundColor: AppColors.primary },
-                        { paddingHorizontal: 14, paddingVertical: 8 }
-                      ]}
-                      onPress={() => setFormUrgency(urg)}
-                    >
-                      <Text style={[styles.infoPillText, formUrgency === urg && { color: 'white', fontWeight: '700' }]}>
-                        {urg.toUpperCase()}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            )}
-
-            {/* Repair Offer Fields */}
-            {createItemType === 'repair_service' && (
-              <>
-                <Text style={styles.inputLabel}>Hourly Rate ($/hr)</Text>
-                <TextInput
-                  placeholder="e.g. 25.00"
-                  placeholderTextColor={AppColors.textMedium}
-                  keyboardType="numeric"
-                  style={styles.modalInput}
-                  value={formHourlyRate}
-                  onChangeText={setFormHourlyRate}
-                />
-
-                <Text style={styles.inputLabel}>Specialties (comma separated)</Text>
-                <TextInput
-                  placeholder="e.g. Electronics, Bicycles, Tailoring"
-                  placeholderTextColor={AppColors.textMedium}
-                  style={styles.modalInput}
-                  value={formRepairSpecialties}
-                  onChangeText={setFormRepairSpecialties}
-                />
-              </>
-            )}
-
-            {/* Workshop Fields */}
-            {createItemType === 'workshop' && (
-              <>
-                <Text style={styles.inputLabel}>Workshop Date & Time</Text>
-                <View style={{ flexDirection: 'row', gap: 10 }}>
-                  <TextInput
-                    placeholder="e.g. Sat Aug 15"
-                    placeholderTextColor={AppColors.textMedium}
-                    style={[styles.modalInput, { flex: 1 }]}
-                    value={formWorkshopDate}
-                    onChangeText={setFormWorkshopDate}
-                  />
-                  <TextInput
-                    placeholder="e.g. 14:00 - 16:00"
-                    placeholderTextColor={AppColors.textMedium}
-                    style={[styles.modalInput, { flex: 1 }]}
-                    value={formWorkshopTime}
-                    onChangeText={setFormWorkshopTime}
-                  />
-                </View>
-
-                <Text style={styles.inputLabel}>Available Spots</Text>
-                <TextInput
-                  placeholder="10"
-                  placeholderTextColor={AppColors.textMedium}
-                  keyboardType="numeric"
-                  style={styles.modalInput}
-                  value={formSpots}
-                  onChangeText={setFormSpots}
-                />
-              </>
-            )}
-
-            {/* Image URL */}
-            <Text style={styles.inputLabel}>Image URL *</Text>
-            <TextInput
-              placeholder="https://images.unsplash.com/..."
-              placeholderTextColor={AppColors.textMedium}
-              style={styles.modalInput}
-              value={formImageUrl}
-              onChangeText={setFormImageUrl}
-            />
-
-            {/* Location */}
-            <Text style={styles.inputLabel}>Location Address</Text>
-            <TextInput
-              placeholder="e.g. Eco Hub, Central District"
-              placeholderTextColor={AppColors.textMedium}
-              style={styles.modalInput}
-              value={formLocation}
-              onChangeText={setFormLocation}
-            />
-
-            {/* Delivery / Pickup Toggles */}
-            {createItemType !== 'workshop' && (
-              <View style={{ marginTop: 12, backgroundColor: '#F9FAFB', padding: 14, borderRadius: 14 }}>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: AppColors.textDark, marginBottom: 8 }}>Delivery & Pickup Options:</Text>
-                <View style={styles.switchRow}>
-                  <Text style={styles.switchLabel}>Has Local Pickup</Text>
-                  <Switch value={formHasPickup} onValueChange={setFormHasPickup} trackColor={{ false: '#D1D5DB', true: AppColors.primary }} />
-                </View>
-                <View style={styles.switchRow}>
-                  <Text style={styles.switchLabel}>Has Bicycle Delivery</Text>
-                  <Switch value={formHasBicycle} onValueChange={setFormHasBicycle} trackColor={{ false: '#D1D5DB', true: AppColors.primary }} />
-                </View>
-                <View style={styles.switchRow}>
-                  <Text style={styles.switchLabel}>Has Shipping</Text>
-                  <Switch value={formHasShipping} onValueChange={setFormHasShipping} trackColor={{ false: '#D1D5DB', true: AppColors.primary }} />
-                </View>
-              </View>
-            )}
-
-            {/* Submit Button */}
-            <TouchableOpacity
-              style={[styles.mainActionBtn, { marginTop: 24, height: 50, backgroundColor: AppColors.primary }]}
-              onPress={handleCreateSubmit}
-              disabled={isSubmittingCreate}
-            >
-              {isSubmittingCreate ? (
-                <ActivityIndicator color="white" size="small" />
-              ) : (
-                <>
-                  <Ionicons name="checkmark-circle-outline" size={20} color="white" />
-                  <Text style={[styles.mainActionBtnText, { fontSize: 15 }]}>Publish Eco Listing</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-
-      {/* ── Live ChatRoom Modal View ── */}
+      {/* â”€â”€ Live ChatRoom Modal View â”€â”€ */}
       <Modal visible={chatModalVisible} animationType="slide" transparent={false} onRequestClose={() => setChatModalVisible(false)}>
         {chatTargetUser && (
           <SafeAreaView style={styles.fullScreenContainer}>
@@ -2198,7 +2631,7 @@ export const EcoMarketScreen = () => {
         )}
       </Modal>
 
-      {/* ── Report Modal ── */}
+      {/* â”€â”€ Report Modal â”€â”€ */}
       <Modal visible={reportModalVisible} animationType="slide" transparent onRequestClose={() => setReportModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { padding: 20 }]}>
@@ -2312,9 +2745,9 @@ const styles = StyleSheet.create({
   registerBtn: { backgroundColor: AppColors.primary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
   registerBtnText: { fontSize: 12, color: 'white', fontWeight: '700' },
 
-  // Left Drawer
-  drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', flexDirection: 'row' },
-  drawerContainer: { width: width * 0.75, height: '100%', backgroundColor: 'white' },
+  // Right Drawer
+  drawerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', flexDirection: 'row', justifyContent: 'flex-end' },
+  drawerContainer: { width: width * 0.80, height: '100%', backgroundColor: 'white', borderTopLeftRadius: 20, borderBottomLeftRadius: 20, elevation: 10 },
   drawerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
   drawerTitle: { fontSize: 17, fontWeight: '800', color: AppColors.textDark },
   categoryItemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
@@ -2433,6 +2866,138 @@ const styles = StyleSheet.create({
   cardChatBtn: { padding: 4, backgroundColor: 'rgba(11, 110, 79, 0.1)', borderRadius: 8 },
   cardChatBtnPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(11, 110, 79, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   cardChatBtnText: { fontSize: 11, fontWeight: '700', color: AppColors.primary },
+  cardChatBtnPillVertical: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(11, 110, 79, 0.1)',
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 10,
+    width: '100%',
+  },
+
+  // Create Listing Page Styles matching CreateAssociationScreen
+  label: { fontSize: 13, fontWeight: '600', color: AppColors.textMedium, marginBottom: 6, marginTop: 2 },
+  fieldGroup: { marginBottom: 14 },
+  input: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 14,
+    color: AppColors.textDark,
+    backgroundColor: '#FAFAFA',
+  },
+  coverPickerBox: {
+    width: '100%',
+    height: 160,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#D1D5DB',
+    marginBottom: 14,
+    position: 'relative',
+  },
+  coverPreview: { width: '100%', height: '100%' },
+  coverPickerPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  coverPickerText: { fontSize: 13, color: AppColors.textMedium, textAlign: 'center' },
+  coverPickerOverlay: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  categoryChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  categoryChipActive: { backgroundColor: AppColors.primary, borderColor: AppColors.primary },
+  categoryChipText: { fontSize: 13, fontWeight: '600', color: AppColors.textMedium },
+  categoryChipTextActive: { color: 'white' },
+  switchInfo: { flex: 1 },
+  switchDesc: { fontSize: 12, color: AppColors.textMedium, marginTop: 4, lineHeight: 17 },
+  createBtn: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 14,
+    height: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    shadowColor: AppColors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  createBtnText: { color: 'white', fontSize: 16, fontWeight: '800' },
+  sectionCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: AppColors.textDark,
+    marginBottom: 14,
+  },
+
+  // Tag/list editor styles (matching CreateAssociationScreen)
+  inputRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  addBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: AppColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  tagsList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  tag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: AppColors.primary + '15',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 6,
+  },
+  tagText: { fontSize: 12, fontWeight: '600', color: AppColors.primary },
+  tagRemove: { padding: 2 },
 });
 
 export default EcoMarketScreen;

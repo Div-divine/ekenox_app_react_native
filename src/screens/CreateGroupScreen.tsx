@@ -53,7 +53,7 @@ const CreateGroupScreen: React.FC<CreateGroupScreenProps> = ({ navigation, onGro
   const pickImage = async (type: 'cover' | 'profile') => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      allowsEditing: false,
       aspect: type === 'cover' ? [16, 9] : [1, 1],
       quality: 0.85,
     });
@@ -97,7 +97,7 @@ const CreateGroupScreen: React.FC<CreateGroupScreenProps> = ({ navigation, onGro
       });
 
       if (result.success) {
-        Alert.alert('Group Created! 🎉', `"${name}" has been created successfully.`, [
+        Alert.alert('Group Created! ðŸŽ‰', `"${name}" has been created successfully.`, [
           {
             text: 'OK',
             onPress: () => {
@@ -187,7 +187,7 @@ const CreateGroupScreen: React.FC<CreateGroupScreenProps> = ({ navigation, onGro
                 onChangeText={setName}
                 maxLength={80}
               />
-              <Text style={styles.fieldHint}>{name.length}/80 — Min. 3 characters</Text>
+              <Text style={styles.fieldHint}>{name.length}/80 â€” Min. 3 characters</Text>
             </View>
 
             {/* Description */}
@@ -203,7 +203,7 @@ const CreateGroupScreen: React.FC<CreateGroupScreenProps> = ({ navigation, onGro
                 textAlignVertical="top"
                 maxLength={500}
               />
-              <Text style={styles.fieldHint}>{description.length}/500 — Min. 10 characters</Text>
+              <Text style={styles.fieldHint}>{description.length}/500 â€” Min. 10 characters</Text>
             </View>
 
             {/* Privacy */}

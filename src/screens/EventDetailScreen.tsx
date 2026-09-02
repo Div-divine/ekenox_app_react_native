@@ -13,14 +13,22 @@ import {
   Platform,
   Linking,
   TextInput,
+  Modal,
+  KeyboardAvoidingView,
+  FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
 import { AppColors } from '../theme/colors';
 import feedService, { Event } from '../services/feedService';
 import { UrlHelper } from '../utils/urlHelper';
 import { useAuth } from '../context/AuthContext';
+import { TagManagementModal } from '../components/TagManagementModal';
+import { EventAnnouncementsWidget } from '../components/EventAnnouncementsWidget';
+import tagService from '../services/tagService';
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +78,7 @@ const HEADER_HEIGHT = 280;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-type RouteParams = { eventId: string | number };
+type RouteParams = { eventId: string | number; initialTab?: 'info' | 'community' | 'feed' };
 
 export const EventDetailScreen = () => {
   const navigation = useNavigation<any>();
@@ -78,14 +86,31 @@ export const EventDetailScreen = () => {
   const insets = useSafeAreaInsets();
   const { eventId } = route.params;
 
+  // Tab & Community Feeds state
+  const initialTab = (route.params?.initialTab === 'community' || route.params?.initialTab === 'feed') ? 'community' : 'info';
+  const [activeTab, setActiveTab] = useState<'info' | 'community'>(initialTab);
+  const [eventFeeds, setEventFeeds] = useState<any[]>([]);
+  const [feedsLoading, setFeedsLoading] = useState(false);
+  const [feedsPage, setFeedsPage] = useState(1);
+  const [hasMoreFeeds, setHasMoreFeeds] = useState(true);
+
+  // Creation State
+  const [postContent, setPostContent] = useState('');
+  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'image' | 'video'; name: string } | null>(null);
+  const [posting, setPosting] = useState(false);
+
   const [event, setEvent] = useState<Event | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRegistering, setIsRegistering] = useState(false);
+  const [attendeesVisible, setAttendeesVisible] = useState(false);
 
   // Event member management states
   const [members, setMembers] = useState<any[]>([]);
   const [isEventAdmin, setIsEventAdmin] = useState(false);
   const [membersLoading, setMembersLoading] = useState(false);
+  const [tagsModalVisible, setTagsModalVisible] = useState(false);
+  const [canPostAnnouncements, setCanPostAnnouncements] = useState(false);
+  const [canManageTags, setCanManageTags] = useState(false);
 
   // New Admin Panel States
   const [emailOrName, setEmailOrName] = useState('');
@@ -97,6 +122,30 @@ export const EventDetailScreen = () => {
   const [isAdminActionLoading, setIsAdminActionLoading] = useState(false);
 
   const { user: currentUser } = useAuth();
+
+  // ── Comments ─────────────────────────────────────────────────────────────────
+  const [comments, setComments] = useState<any[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [commentsVisible, setCommentsVisible] = useState(false);
+  const [commentInput, setCommentInput] = useState('');
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<any | null>(null);
+  const [editingComment, setEditingComment] = useState<any | null>(null);
+  const [expandedReplies, setExpandedReplies] = useState<Set<number>>(new Set());
+  const [repliesMap, setRepliesMap] = useState<Record<number, any[]>>({});
+  const [loadingRepliesId, setLoadingRepliesId] = useState<number | null>(null);
+  const [commentPage, setCommentPage] = useState(0);
+  const [hasMoreComments, setHasMoreComments] = useState(false);
+  const commentInputRef = useRef<TextInput>(null);
+
+  const REACTION_TYPES = ['like', 'love', 'haha', 'wow', 'sad', 'angry'] as const;
+  const REACTION_EMOJIS: Record<string, string> = {
+    like: '👍', love: '❤️', haha: '😂', wow: '😮', sad: '😢', angry: '😠',
+  };
+  const REPORT_REASONS = [
+    'Spam or misleading', 'Harassment or bullying', 'Hate speech',
+    'Violence or dangerous content', 'Misinformation', 'Other',
+  ];
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -111,6 +160,124 @@ export const EventDetailScreen = () => {
     outputRange: [1.4, 1],
     extrapolate: 'clamp',
   });
+
+  // ── Community Feeds Logic ───────────────────────────────────────────────────
+  const loadFeeds = useCallback(async (page = 1, isRefresh = false) => {
+    if (feedsLoading) return;
+    setFeedsLoading(true);
+    try {
+      const list = await feedService.getEventFeeds(eventId, page, 10);
+      if (isRefresh || page === 1) {
+        setEventFeeds(list);
+        setFeedsPage(1);
+        setHasMoreFeeds(list.length === 10);
+      } else {
+        if (list.length > 0) {
+          setEventFeeds(prev => [...prev, ...list]);
+          setFeedsPage(page);
+          setHasMoreFeeds(list.length === 10);
+        } else {
+          setHasMoreFeeds(false);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load event feeds:', err);
+    } finally {
+      setFeedsLoading(false);
+    }
+  }, [eventId, feedsLoading]);
+
+  useEffect(() => {
+    if (activeTab === 'community' && eventId) {
+      loadFeeds(1, true);
+    }
+  }, [activeTab, eventId]);
+
+  const pickProofMedia = async (type: 'image' | 'video') => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission Required', 'Please allow media library access to attach photos or videos.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: type === 'image' ? ImagePicker.MediaTypeOptions.Images : ImagePicker.MediaTypeOptions.Videos,
+      quality: 0.85,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      setSelectedMedia({
+        uri: asset.uri,
+        type,
+        name: asset.fileName || `${type}_${Date.now()}.${type === 'image' ? 'jpg' : 'mp4'}`,
+      });
+    }
+  };
+
+  const captureProofMedia = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission Required', 'Please allow camera access to take a photo or video.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.85,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      const isVideo = asset.type === 'video';
+      setSelectedMedia({
+        uri: asset.uri,
+        type: isVideo ? 'video' : 'image',
+        name: asset.fileName || `capture_${Date.now()}.${isVideo ? 'mp4' : 'jpg'}`,
+      });
+    }
+  };
+
+  const handleCreateFeedPost = async () => {
+    if (!postContent.trim() && !selectedMedia) {
+      Alert.alert('Empty Post', 'Please write something or attach a photo/video.');
+      return;
+    }
+    setPosting(true);
+    try {
+      const result = await feedService.createFeedFull({
+        content: postContent.trim() || ' ',
+        postType: 'event',
+        mediaFiles: selectedMedia ? [selectedMedia] : undefined,
+        eventId: event?.id || eventId,
+        privacyLevel: 'public',
+      });
+
+      if (result.success) {
+        Alert.alert('Posted!', 'Your post has been shared to the event community feed!');
+        setPostContent('');
+        setSelectedMedia(null);
+        loadFeeds(1, true);
+      } else {
+        Alert.alert('Error', result.message || 'Failed to share post.');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'An error occurred.');
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const handleLikePost = async (postId: string | number) => {
+    setEventFeeds(prev => prev.map(p => {
+      if (p.id === postId) {
+        const newIsLiked = !p.is_liked;
+        return {
+          ...p,
+          is_liked: newIsLiked,
+          likes_count: newIsLiked ? (p.likes_count + 1) : Math.max(0, p.likes_count - 1),
+        };
+      }
+      return p;
+    }));
+    await feedService.toggleReaction(postId);
+  };
 
   // ── Data loading ────────────────────────────────────────────────────────────
   const loadEvent = useCallback(async () => {
@@ -135,12 +302,29 @@ export const EventDetailScreen = () => {
         setMembers(res.members || []);
         setIsEventAdmin(res.is_admin || false);
       }
+
+      if (currentUser?.id) {
+        try {
+          const perms = await tagService.getUserEventPermissions(currentUser.id, event.id);
+          if (perms) {
+            const hasManageTags = perms.is_admin || perms.is_creator || perms.permitted_actions?.includes('manage_tags');
+            const hasPostUpdates = perms.is_admin || perms.is_creator || perms.permitted_actions?.includes('post_updates');
+            setCanManageTags(Boolean(hasManageTags));
+            setCanPostAnnouncements(Boolean(hasPostUpdates));
+            if (hasManageTags) {
+              setIsEventAdmin(true);
+            }
+          }
+        } catch (tagErr) {
+          console.warn('Failed to load event tag permissions:', tagErr);
+        }
+      }
     } catch (e) {
       console.warn('Failed to load event members:', e);
     } finally {
       setMembersLoading(false);
     }
-  }, [event]);
+  }, [event, currentUser]);
 
   const loadDelegations = useCallback(async () => {
     if (!event) return;
@@ -384,6 +568,130 @@ export const EventDetailScreen = () => {
     } catch { }
   };
 
+  // ── Event Comment Handlers ──────────────────────────────────────────────────
+  const loadComments = useCallback(async (reset = false) => {
+    if (!event) return;
+    setCommentsLoading(true);
+    const offset = reset ? 0 : commentPage;
+    const { data, pagination } = await feedService.getEventComments(event.id, {
+      sort_by: 'newest', limit: 20, offset,
+    });
+    setComments(prev => reset ? data : [...prev, ...data]);
+    setHasMoreComments(pagination.has_more || false);
+    setCommentPage(reset ? data.length : offset + data.length);
+    setCommentsLoading(false);
+  }, [event, commentPage]);
+
+  const handleOpenComments = () => {
+    setCommentsVisible(true);
+    if (comments.length === 0) loadComments(true);
+  };
+
+  const handleSubmitComment = async () => {
+    const text = commentInput.trim();
+    if (!text || !event) return;
+    setCommentSubmitting(true);
+    try {
+      if (editingComment) {
+        const res = await feedService.updateEventComment(event.id, editingComment.id, text);
+        if (res.success) {
+          setComments(prev => prev.map(c => c.id === editingComment.id ? { ...c, content: text, is_edited: true } : c));
+          setEditingComment(null);
+        } else Alert.alert('Error', res.message || 'Failed to update comment');
+      } else {
+        const res = await feedService.createEventComment(event.id, text, replyingTo?.id);
+        if (res.success && res.data) {
+          if (replyingTo) {
+            setRepliesMap(prev => ({ ...prev, [replyingTo.id]: [res.data, ...(prev[replyingTo.id] || [])] }));
+            setComments(prev => prev.map(c => c.id === replyingTo.id ? { ...c, reply_count: (c.reply_count || 0) + 1 } : c));
+          } else {
+            setComments(prev => [res.data, ...prev]);
+            setEvent(prev => prev ? { ...prev, comment_count: (prev.comment_count || 0) + 1 } : prev);
+          }
+          setReplyingTo(null);
+        } else Alert.alert('Error', res.message || 'Failed to post comment');
+      }
+    } finally {
+      setCommentInput('');
+      setCommentSubmitting(false);
+    }
+  };
+
+  const handleDeleteComment = (commentId: number) => {
+    if (!event) return;
+    Alert.alert('Delete Comment', 'Are you sure you want to delete this comment?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          const ok = await feedService.deleteEventComment(event.id, commentId);
+          if (ok) {
+            setComments(prev => prev.filter(c => c.id !== commentId));
+            setEvent(prev => prev ? { ...prev, comment_count: Math.max(0, (prev.comment_count || 1) - 1) } : prev);
+          } else Alert.alert('Error', 'Failed to delete comment');
+        },
+      },
+    ]);
+  };
+
+  const handleReactToComment = async (comment: any, reactionType: string) => {
+    if (!event) return;
+    const res = await feedService.reactToEventComment(event.id, comment.id, reactionType);
+    if (res.success) {
+      setComments(prev => prev.map(c => {
+        if (c.id !== comment.id) return c;
+        const alreadyReacted = c.has_liked && c.user_reaction === reactionType;
+        return {
+          ...c,
+          has_liked: !alreadyReacted,
+          user_reaction: alreadyReacted ? null : reactionType,
+          like_count: alreadyReacted ? Math.max(0, c.like_count - 1) : c.like_count + 1,
+        };
+      }));
+    }
+  };
+
+  const handleToggleReplies = async (comment: any) => {
+    const id = comment.id;
+    if (expandedReplies.has(id)) {
+      setExpandedReplies(prev => { const s = new Set(prev); s.delete(id); return s; });
+      return;
+    }
+    setLoadingRepliesId(id);
+    if (!repliesMap[id]) {
+      const { data } = await feedService.getEventCommentReplies(event!.id, id);
+      setRepliesMap(prev => ({ ...prev, [id]: data }));
+    }
+    setExpandedReplies(prev => new Set([...prev, id]));
+    setLoadingRepliesId(null);
+  };
+
+  const handleReportEvent = () => {
+    if (!event) return;
+    Alert.alert('Report Event', 'Select a reason', [
+      ...REPORT_REASONS.map(r => ({
+        text: r, onPress: async () => {
+          const ok = await feedService.reportEvent(event.id, r);
+          Alert.alert(ok ? 'Reported' : 'Error', ok ? 'Event has been reported. Thank you.' : 'Failed to report event.');
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const handleReportComment = (commentId: number) => {
+    if (!event) return;
+    Alert.alert('Report Comment', 'Select a reason', [
+      ...REPORT_REASONS.map(r => ({
+        text: r, onPress: async () => {
+          const ok = await feedService.reportEventComment(event.id, commentId, r);
+          Alert.alert(ok ? 'Reported' : 'Error', ok ? 'Comment reported. Thank you.' : 'Failed to report comment.');
+        },
+      })),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   // ── Render helpers ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -477,14 +785,23 @@ export const EventDetailScreen = () => {
           <Text style={styles.title}>{event.title}</Text>
 
           {event.organizer && (
-            <View style={styles.organizerRow}>
+            <TouchableOpacity
+              style={styles.organizerRow}
+              onPress={() => {
+                const organizerId = (event.organizer as any)?.user_id || (event.organizer as any)?.id || (event as any).creator_id || (event as any).creator?.id || (event as any).user?.id;
+                if (organizerId) {
+                  (navigation as any).navigate('Profile', { userId: organizerId });
+                }
+              }}
+              activeOpacity={0.7}
+            >
               <View style={styles.organizerAvatar}>
                 <Ionicons name="person" size={14} color={AppColors.primary} />
               </View>
               <Text style={styles.organizerText}>
                 Organized by <Text style={styles.organizerName}>{event.organizer.name}</Text>
               </Text>
-            </View>
+            </TouchableOpacity>
           )}
 
           {/* Categories */}
@@ -509,63 +826,101 @@ export const EventDetailScreen = () => {
             </View>
           )}
 
-          <View style={styles.divider} />
-
-          {/* Info rows */}
-          <InfoRow icon="calendar-outline" label={formatDateRange(event.startTime, event.endTime)} />
-
-          {/* Privacy visibility logic: Location hidden if private and no access */}
-          {event.location && event.location.includes('🔒') ? (
-            <View>
-              <InfoRow icon="lock-closed" label={event.location} labelColor="#EF4444" />
-              <Text style={{ fontSize: 11, color: AppColors.textMedium, marginLeft: 38, marginTop: -6, marginBottom: 8 }}>
-                Location is private and accessible only to authorized group/association members.
+          {/* ── Segmented Tab Switcher ── */}
+          <View style={styles.tabContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'info' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('info')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="information-circle-outline"
+                size={16}
+                color={activeTab === 'info' ? AppColors.primary : AppColors.textMedium}
+              />
+              <Text style={[styles.tabText, activeTab === 'info' && styles.tabTextActive]}>
+                Event Info
               </Text>
-            </View>
-          ) : (
-            <InfoRow icon="location-outline" label={event.location || 'Location TBD'} />
-          )}
+            </TouchableOpacity>
 
-          {event.event_type && <InfoRow icon="pricetag-outline" label={event.event_type} />}
-          {event.website && (event.privacyLevel !== 'private' || event.hasAccess) && (
-            <InfoRow
-              icon="globe-outline"
-              label={event.website}
-              onPress={() => Linking.openURL(event.website!)}
-              labelColor={AppColors.primary}
-            />
-          )}
-          {event.email && (
-            <InfoRow
-              icon="mail-outline"
-              label={event.email}
-              onPress={() => Linking.openURL(`mailto:${event.email}`)}
-              labelColor={AppColors.primary}
-            />
-          )}
-          {event.phone && (
-            <InfoRow
-              icon="call-outline"
-              label={event.phone}
-              onPress={() => Linking.openURL(`tel:${event.phone}`)}
-              labelColor={AppColors.primary}
-            />
-          )}
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'community' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('community')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="chatbubbles-outline"
+                size={16}
+                color={activeTab === 'community' ? AppColors.primary : AppColors.textMedium}
+              />
+              <Text style={[styles.tabText, activeTab === 'community' && styles.tabTextActive]}>
+                Community Feed
+              </Text>
+              {eventFeeds.length > 0 && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{eventFeeds.length}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
 
-          <View style={styles.divider} />
-
-          {/* Description */}
-          <Text style={styles.sectionTitle}>About this Event</Text>
-          <Text style={[styles.description, event.privacyLevel === 'private' && !event.hasAccess && { opacity: 0.5 }]}>
-            {event.privacyLevel === 'private' && !event.hasAccess
-              ? 'This is a private event. Description and further details are only visible to authorized members.'
-              : event.description || 'No description available.'}
-          </Text>
-
-          {/* Event Attendees Management Section (Replaces or complements simple registrations) */}
-          {(event.privacyLevel !== 'private' || event.hasAccess) && (
+          {activeTab === 'info' ? (
             <>
-              {isEventAdmin && (
+              {/* Info rows */}
+              <InfoRow icon="calendar-outline" label={formatDateRange(event.startTime, event.endTime)} />
+
+              {/* Location: API returns a locked string when display_location=false or private event non-member */}
+              {event.location && event.location.startsWith('🔒') ? (
+                <View>
+                  <InfoRow icon="lock-closed" label={event.location} labelColor="#EF4444" />
+                  <Text style={{ fontSize: 11, color: AppColors.textMedium, marginLeft: 38, marginTop: -6, marginBottom: 8 }}>
+                    {(event.privacyLevel || event.privacy_level) === 'private'
+                      ? 'Location is only visible to authorised members of this private event.'
+                      : 'Location is hidden by the event organiser.'}
+                  </Text>
+                </View>
+              ) : (
+                <InfoRow icon="location-outline" label={event.location || 'Location TBD'} />
+              )}
+
+              {event.event_type && <InfoRow icon="pricetag-outline" label={event.event_type} />}
+              {event.website && (
+                <InfoRow
+                  icon="globe-outline"
+                  label={event.website}
+                  onPress={() => Linking.openURL(event.website!)}
+                  labelColor={AppColors.primary}
+                />
+              )}
+              {event.email && (
+                <InfoRow
+                  icon="mail-outline"
+                  label={event.email}
+                  onPress={() => Linking.openURL(`mailto:${event.email}`)}
+                  labelColor={AppColors.primary}
+                />
+              )}
+              {event.phone && (
+                <InfoRow
+                  icon="call-outline"
+                  label={event.phone}
+                  onPress={() => Linking.openURL(`tel:${event.phone}`)}
+                  labelColor={AppColors.primary}
+                />
+              )}
+
+              <View style={styles.divider} />
+
+              {/* Description */}
+              <Text style={styles.sectionTitle}>About this Event</Text>
+              <Text style={[styles.description, !event.hasAccess && { opacity: 0.5 }]}>
+                {!event.hasAccess
+                  ? 'This event is restricted. Full details are visible to authorised members only.'
+                  : event.description || 'No description available.'}
+              </Text>
+
+              {/* Event Attendees Management Section (Replaces or complements simple registrations) */}
+              {event.hasAccess !== false && isEventAdmin && (
                 <>
                   <View style={styles.divider} />
                   <Text style={styles.sectionTitle}>Admin Event Panel</Text>
@@ -668,18 +1023,315 @@ export const EventDetailScreen = () => {
                 </>
               )}
 
+              {/* Car Sharing Section */}
               <View style={styles.divider} />
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Event Attendees ({members.length})</Text>
-                {membersLoading && <ActivityIndicator size="small" color={AppColors.primary} />}
+              <View style={styles.carShareCard}>
+                <View style={styles.carShareHeader}>
+                  <View style={styles.carShareIconWrap}>
+                    <Ionicons name="car-sport" size={22} color="white" />
+                  </View>
+                  <View style={styles.carShareInfo}>
+                    <Text style={styles.carShareTitle}>Eco Car Share</Text>
+                    <Text style={styles.carShareDesc}>Coordinate rides and share travel costs with other champions.</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.carShareBtn}
+                  onPress={() => navigation.navigate('CarShare', {
+                    screen: 'CarShareScreen',
+                    params: {
+                      eventId: event.id,
+                      eventTitle: event.title,
+                      eventLocation: event.location
+                    }
+                  })}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.carShareBtnText}>Browse Available Rides</Text>
+                  <Ionicons name="arrow-forward" size={16} color="white" />
+                </TouchableOpacity>
               </View>
 
-              {members.length === 0 ? (
-                <Text style={styles.noMembersText}>No registered champions yet.</Text>
+              {/* Stats row */}
+              <View style={styles.divider} />
+              <View style={styles.statsRow}>
+                <TouchableOpacity style={styles.statPill} onPress={() => setAttendeesVisible(true)}>
+                  <Ionicons name="people-outline" size={16} color={AppColors.primary} />
+                  <Text style={styles.statValue}>{attendeesCount}</Text>
+                  <Text style={styles.statLabel}>Going</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.statPill} onPress={handleOpenComments}>
+                  <Ionicons name="chatbubble-outline" size={16} color={AppColors.primary} />
+                  <Text style={styles.statValue}>{event.comment_count ?? 0}</Text>
+                  <Text style={styles.statLabel}>Comments</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.statPill}
+                  onPress={() => navigation.navigate('CarShare', {
+                    screen: 'CarShareScreen',
+                    params: {
+                      eventId: event.id,
+                      eventTitle: event.title,
+                      eventLocation: event.location
+                    }
+                  })}
+                >
+                  <Ionicons name="car-outline" size={16} color={AppColors.primary} />
+                  <Text style={styles.statValue}>{event.car_share_count ?? 0}</Text>
+                  <Text style={styles.statLabel}>Rides</Text>
+                </TouchableOpacity>
+
+                {event.share_count !== undefined && (
+                  <StatPill icon="share-outline" value={event.share_count} label="Shares" />
+                )}
+              </View>
+
+              {/* ── Event Announcements & Updates ── */}
+              <View style={styles.divider} />
+              <EventAnnouncementsWidget
+                eventId={eventId}
+                canPost={isEventAdmin || canPostAnnouncements}
+              />
+
+              {/* ── Report Event Button ── */}
+              <View style={styles.divider} />
+              <TouchableOpacity style={styles.reportEventBtn} onPress={handleReportEvent}>
+                <Ionicons name="flag-outline" size={16} color="#EF4444" />
+                <Text style={styles.reportEventBtnText}>Report this event</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              {/* ── Community Feed Tab ── */}
+              {/* Share Feed Post Form */}
+              <View style={styles.shareContainer}>
+                <Text style={styles.shareTitle}>Share with Event Attendees</Text>
+                <TextInput
+                  style={styles.shareInput}
+                  placeholder="Share a photo, question, or update about this event..."
+                  placeholderTextColor={AppColors.textLight}
+                  value={postContent}
+                  onChangeText={setPostContent}
+                  multiline
+                />
+
+                {selectedMedia && (
+                  <View style={styles.previewContainer}>
+                    <Image source={{ uri: selectedMedia.uri }} style={styles.previewImage} />
+                    {selectedMedia.type === 'video' && (
+                      <View style={styles.previewVideoOverlay}>
+                        <Ionicons name="play" size={24} color="#FFF" />
+                      </View>
+                    )}
+                    <TouchableOpacity style={styles.removePreviewBtn} onPress={() => setSelectedMedia(null)}>
+                      <Ionicons name="close" size={14} color="#FFF" />
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <View style={styles.attachmentRow}>
+                  <TouchableOpacity style={styles.attachmentBtn} onPress={() => pickProofMedia('image')}>
+                    <Ionicons name="image-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.attachmentBtnText}>Image</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.attachmentBtn} onPress={() => pickProofMedia('video')}>
+                    <Ionicons name="videocam-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.attachmentBtnText}>Video</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.attachmentBtn} onPress={captureProofMedia}>
+                    <Ionicons name="camera-outline" size={16} color={AppColors.primary} />
+                    <Text style={styles.attachmentBtnText}>Camera</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.postButton, posting && { opacity: 0.7 }]}
+                  onPress={handleCreateFeedPost}
+                  disabled={posting}
+                >
+                  {posting ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.postButtonText}>Post to Event Feed</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Feeds List */}
+              {feedsLoading && eventFeeds.length === 0 ? (
+                <ActivityIndicator size="large" color={AppColors.primary} style={{ marginTop: 24 }} />
+              ) : eventFeeds.length === 0 ? (
+                <View style={styles.noPostsContainer}>
+                  <Ionicons name="chatbubbles-outline" size={48} color={AppColors.textLight} />
+                  <Text style={styles.noPostsText}>No posts shared for this event yet. Be the first to share an update or question!</Text>
+                </View>
               ) : (
-                <View style={styles.membersContainer}>
-                  {members.map(member => (
-                    <View key={member.registration_id} style={styles.memberListItem}>
+                eventFeeds.map(post => {
+                  const authorName = post.user?.full_name || post.author?.full_name || 'Attendee';
+                  const authorImage = post.user?.profile_image || post.user?.avatar_url || post.author?.profile_image;
+                  const isLiked = post.is_liked || post.user_reacted;
+                  const likes = post.likes_count ?? 0;
+                  const comments = post.comments_count ?? 0;
+                  const hasMedia = post.media && post.media.length > 0;
+
+                  return (
+                    <View key={post.id} style={styles.postCard}>
+                      <View style={styles.postHeader}>
+                        {authorImage ? (
+                          <Image source={{ uri: resolveMediaUrl(authorImage) }} style={styles.postAvatar} />
+                        ) : (
+                          <View style={styles.postAvatarPlaceholder}>
+                            <Text style={styles.postAvatarText}>
+                              {authorName.substring(0, 2).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        <View style={styles.postAuthorInfo}>
+                          <Text style={styles.postAuthorName}>{authorName}</Text>
+                          <Text style={styles.postTime}>
+                            {new Date(post.created_at || post.createdAt).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {post.content ? <Text style={styles.postBody}>{post.content}</Text> : null}
+
+                      {hasMedia && post.media.map((media: any) => {
+                        return (
+                          <Image
+                            key={media.id || media.url}
+                            source={{ uri: resolveMediaUrl(media.url) }}
+                            style={styles.postMedia}
+                            resizeMode="cover"
+                          />
+                        );
+                      })}
+
+                      <View style={styles.postActions}>
+                        <TouchableOpacity style={styles.postActionBtn} onPress={() => handleLikePost(post.id)}>
+                          <Ionicons
+                            name={isLiked ? "heart" : "heart-outline"}
+                            size={18}
+                            color={isLiked ? AppColors.error : AppColors.textMedium}
+                          />
+                          <Text style={[styles.postActionText, isLiked && { color: AppColors.error }]}>{likes}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.postActionBtn}
+                          onPress={() => navigation.navigate('Comments', { feedId: post.id })}
+                        >
+                          <Ionicons name="chatbubble-outline" size={18} color={AppColors.textMedium} />
+                          <Text style={styles.postActionText}>{comments}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.postActionBtn}
+                          onPress={() => {
+                            Share.share({
+                              message: `${post.content}\n\nShared from ${event.title} on Ekenox`,
+                            });
+                          }}
+                        >
+                          <Ionicons name="share-social-outline" size={18} color={AppColors.textMedium} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+
+              {hasMoreFeeds && eventFeeds.length >= 10 && (
+                <TouchableOpacity
+                  style={{ paddingVertical: 14, alignItems: 'center' }}
+                  onPress={() => loadFeeds(feedsPage + 1)}
+                  disabled={feedsLoading}
+                >
+                  {feedsLoading ? (
+                    <ActivityIndicator size="small" color={AppColors.primary} />
+                  ) : (
+                    <Text style={{ fontSize: 13, color: AppColors.primary, fontWeight: '700' }}>Load More Posts</Text>
+                  )}
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+        </View>
+
+        {/* ── Attendees Modal ── */}
+        <Modal
+          visible={attendeesVisible}
+          animationType="slide"
+          transparent
+          onRequestClose={() => setAttendeesVisible(false)}
+        >
+          <View style={styles.commentsSheet}>
+            {/* Header */}
+            <View style={styles.commentsHeader}>
+              <Text style={styles.commentsHeaderTitle}>Event Attendees ({members.length})</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                {(isEventAdmin || canManageTags) && (
+                  <TouchableOpacity
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: '#EEF2FF',
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 6,
+                      gap: 4,
+                    }}
+                    onPress={() => {
+                      setAttendeesVisible(false);
+                      setTagsModalVisible(true);
+                    }}
+                  >
+                    <Ionicons name="pricetags-outline" size={14} color="#4F46E5" />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#4F46E5' }}>
+                      Tags & Roles
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity onPress={() => setAttendeesVisible(false)}>
+                  <Ionicons name="close" size={24} color={AppColors.textDark} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Members List */}
+            {membersLoading ? (
+              <View style={styles.commentsLoader}>
+                <ActivityIndicator size="large" color={AppColors.primary} />
+              </View>
+            ) : members.length === 0 ? (
+              <View style={styles.commentsEmpty}>
+                <Ionicons name="people-outline" size={40} color={AppColors.textLight} />
+                <Text style={styles.commentsEmptyText}>No registered champions yet.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={members}
+                keyExtractor={item => String(item.registration_id || item.id)}
+                contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 12 }}
+                renderItem={({ item: member }) => (
+                  <View style={styles.memberListItem}>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                      onPress={() => {
+                        setAttendeesVisible(false);
+                        if (member.user?.id) {
+                          navigation.navigate('Profile', { userId: member.user.id });
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
                       {member.user?.profile_image ? (
                         <Image
                           source={{ uri: resolveMediaUrl(member.user.profile_image) }}
@@ -700,92 +1352,313 @@ export const EventDetailScreen = () => {
                           </View>
                         )}
                       </View>
-                      {/* Show remove button if current user is admin, and target user is not creator */}
-                      {isEventAdmin && !member.is_creator && (
-                        <TouchableOpacity
-                          style={styles.removeMemberBtn}
-                          onPress={() => handleRemoveMember(member.user?.id, member.user?.full_name)}
-                        >
-                          <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  ))}
-                </View>
-              )}
-            </>
-          )}
-
-          {/* Stats row */}
-          <View style={styles.divider} />
-          <View style={styles.statsRow}>
-            <StatPill icon="people-outline" value={attendeesCount} label="Going" />
-            {event.comment_count !== undefined && (
-              <StatPill icon="chatbubble-outline" value={event.comment_count} label="Comments" />
-            )}
-            {event.share_count !== undefined && (
-              <StatPill icon="share-outline" value={event.share_count} label="Shares" />
-            )}
-            {event.car_share_count !== undefined && (
-              <StatPill icon="car-outline" value={event.car_share_count} label="Car Shares" />
+                    </TouchableOpacity>
+                    {isEventAdmin && !member.is_creator && (
+                      <TouchableOpacity
+                        style={styles.removeMemberBtn}
+                        onPress={() => {
+                          setAttendeesVisible(false);
+                          handleRemoveMember(member.user?.id, member.user?.full_name);
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              />
             )}
           </View>
-        </View>
+        </Modal>
+
+        {/* ── Comments Modal ── */}
+        <Modal
+          visible={commentsVisible}
+          animationType="slide"
+          transparent
+          onRequestClose={() => { setCommentsVisible(false); setReplyingTo(null); setEditingComment(null); }}
+        >
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <View style={styles.commentsSheet}>
+              {/* Header */}
+              <View style={styles.commentsHeader}>
+                <Text style={styles.commentsHeaderTitle}>Comments ({event.comment_count ?? 0})</Text>
+                <TouchableOpacity onPress={() => { setCommentsVisible(false); setReplyingTo(null); setEditingComment(null); }}>
+                  <Ionicons name="close" size={24} color={AppColors.textDark} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Comment list */}
+              {commentsLoading && comments.length === 0 ? (
+                <View style={styles.commentsLoader}>
+                  <ActivityIndicator size="large" color={AppColors.primary} />
+                </View>
+              ) : (
+                <FlatList
+                  data={comments}
+                  keyExtractor={item => String(item.id)}
+                  style={{ flex: 1 }}
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8 }}
+                  ListEmptyComponent={
+                    <View style={styles.commentsEmpty}>
+                      <Ionicons name="chatbubble-outline" size={40} color={AppColors.textLight} />
+                      <Text style={styles.commentsEmptyText}>No comments yet. Be the first!</Text>
+                    </View>
+                  }
+                  ListFooterComponent={hasMoreComments ? (
+                    <TouchableOpacity style={styles.loadMoreBtn} onPress={() => loadComments()}>
+                      {commentsLoading ? <ActivityIndicator size="small" color={AppColors.primary} /> : <Text style={styles.loadMoreText}>Load more comments</Text>}
+                    </TouchableOpacity>
+                  ) : null}
+                  renderItem={({ item: comment }) => (
+                    <View style={styles.commentItem}>
+                      {/* Author avatar */}
+                      <View style={styles.commentAvatarCol}>
+                        {comment.user?.profile_image ? (
+                          <Image source={{ uri: UrlHelper.convertPathToUrl(comment.user.profile_image) }} style={styles.commentAvatar} />
+                        ) : (
+                          <View style={[styles.commentAvatar, styles.commentAvatarFallback]}>
+                            <Text style={styles.commentAvatarInitial}>{(comment.user?.full_name || 'U')[0]}</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        {/* Bubble */}
+                        <View style={styles.commentBubble}>
+                          <View style={styles.commentBubbleHeader}>
+                            <Text style={styles.commentAuthor}>{comment.user?.full_name || 'User'}</Text>
+                            {comment.is_edited && <Text style={styles.editedTag}>(edited)</Text>}
+                          </View>
+                          <Text style={styles.commentContent}>{comment.content}</Text>
+                        </View>
+
+                        {/* Actions row */}
+                        <View style={styles.commentActions}>
+                          {/* Reactions */}
+                          <TouchableOpacity
+                            style={styles.commentReactBtn}
+                            onPress={() => handleReactToComment(comment, 'like')}
+                            onLongPress={() => {
+                              Alert.alert('React', 'Choose reaction', [
+                                ...REACTION_TYPES.map(r => ({ text: `${REACTION_EMOJIS[r]} ${r}`, onPress: () => handleReactToComment(comment, r) })),
+                                { text: 'Cancel', style: 'cancel' },
+                              ]);
+                            }}
+                          >
+                            <Text style={[styles.commentReactText, comment.has_liked && { color: AppColors.primary }]}>
+                              {comment.has_liked ? REACTION_EMOJIS[comment.user_reaction || 'like'] : '👍'}
+                            </Text>
+                            {comment.like_count > 0 && <Text style={styles.commentReactCount}>{comment.like_count}</Text>}
+                          </TouchableOpacity>
+
+                          {/* Reply */}
+                          <TouchableOpacity
+                            style={styles.commentActionBtn}
+                            onPress={() => {
+                              setReplyingTo(comment);
+                              setEditingComment(null);
+                              setCommentInput('');
+                              setTimeout(() => commentInputRef.current?.focus(), 100);
+                            }}
+                          >
+                            <Text style={styles.commentActionText}>Reply</Text>
+                          </TouchableOpacity>
+
+                          {/* Edit (own comment) */}
+                          {currentUser && String(currentUser.id) === String(comment.user?.id) && (
+                            <TouchableOpacity
+                              style={styles.commentActionBtn}
+                              onPress={() => {
+                                setEditingComment(comment);
+                                setReplyingTo(null);
+                                setCommentInput(comment.content);
+                                setTimeout(() => commentInputRef.current?.focus(), 100);
+                              }}
+                            >
+                              <Text style={styles.commentActionText}>Edit</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {/* Delete (own comment or admin) */}
+                          {(currentUser && (String(currentUser.id) === String(comment.user?.id) || isEventAdmin)) && (
+                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => handleDeleteComment(comment.id)}>
+                              <Text style={[styles.commentActionText, { color: '#EF4444' }]}>Delete</Text>
+                            </TouchableOpacity>
+                          )}
+
+                          {/* Report */}
+                          {currentUser && String(currentUser.id) !== String(comment.user?.id) && (
+                            <TouchableOpacity style={styles.commentActionBtn} onPress={() => handleReportComment(comment.id)}>
+                              <Ionicons name="flag-outline" size={12} color={AppColors.textLight} />
+                            </TouchableOpacity>
+                          )}
+
+                          {/* Time */}
+                          <Text style={styles.commentTime}>
+                            {new Date(comment.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </Text>
+                        </View>
+
+                        {/* Replies toggle */}
+                        {(comment.reply_count > 0 || expandedReplies.has(comment.id)) && (
+                          <TouchableOpacity
+                            style={styles.repliesToggle}
+                            onPress={() => handleToggleReplies(comment)}
+                          >
+                            {loadingRepliesId === comment.id ? (
+                              <ActivityIndicator size="small" color={AppColors.primary} />
+                            ) : (
+                              <Text style={styles.repliesToggleText}>
+                                {expandedReplies.has(comment.id)
+                                  ? 'Hide replies'
+                                  : `View ${comment.reply_count} ${comment.reply_count === 1 ? 'reply' : 'replies'}`}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                        )}
+
+                        {/* Replies list */}
+                        {expandedReplies.has(comment.id) && (repliesMap[comment.id] || []).map(reply => (
+                          <View key={reply.id} style={styles.replyItem}>
+                            {reply.user?.profile_image ? (
+                              <Image source={{ uri: UrlHelper.convertPathToUrl(reply.user.profile_image) }} style={styles.replyAvatar} />
+                            ) : (
+                              <View style={[styles.replyAvatar, styles.commentAvatarFallback]}>
+                                <Text style={[styles.commentAvatarInitial, { fontSize: 9 }]}>{(reply.user?.full_name || 'U')[0]}</Text>
+                              </View>
+                            )}
+                            <View style={styles.replyBubble}>
+                              <Text style={styles.replyAuthor}>{reply.user?.full_name || 'User'}</Text>
+                              <Text style={styles.replyContent}>{reply.content}</Text>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                />
+              )}
+
+              {/* Input bar */}
+              <View style={styles.commentInputBar}>
+                {(replyingTo || editingComment) && (
+                  <View style={styles.commentReplyBanner}>
+                    <Text style={styles.commentReplyBannerText}>
+                      {editingComment ? `Editing comment` : `Replying to ${replyingTo?.user?.full_name}`}
+                    </Text>
+                    <TouchableOpacity onPress={() => { setReplyingTo(null); setEditingComment(null); setCommentInput(''); }}>
+                      <Ionicons name="close-circle" size={16} color={AppColors.textMedium} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+                <View style={styles.commentInputRow}>
+                  <TextInput
+                    ref={commentInputRef}
+                    style={styles.commentTextInput}
+                    placeholder={replyingTo ? `Reply to ${replyingTo.user?.full_name}…` : 'Write a comment…'}
+                    placeholderTextColor={AppColors.textMedium}
+                    value={commentInput}
+                    onChangeText={setCommentInput}
+                    multiline
+                    maxLength={1000}
+                  />
+                  <TouchableOpacity
+                    style={[styles.commentSendBtn, !commentInput.trim() && { opacity: 0.4 }]}
+                    onPress={handleSubmitComment}
+                    disabled={!commentInput.trim() || commentSubmitting}
+                  >
+                    {commentSubmitting
+                      ? <ActivityIndicator size="small" color="white" />
+                      : <Ionicons name="send" size={18} color="white" />}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
       </Animated.ScrollView>
 
       {/* ── Sticky Registration CTA ── */}
       <View style={[styles.ctaBar, { paddingBottom: insets.bottom > 0 ? insets.bottom : 16 }]}>
-        <TouchableOpacity
-          style={[
-            styles.registerBtn,
-            isRegistered && styles.unregisterBtn,
-            event.privacyLevel === 'private' && !event.hasAccess && styles.disabledRegisterBtn
-          ]}
-          onPress={handleRegister}
-          disabled={isRegistering || status.label === 'Past' || (event.privacyLevel === 'private' && !event.hasAccess)}
-          activeOpacity={0.85}
-        >
-          {isRegistering ? (
-            <ActivityIndicator color={isRegistered ? AppColors.primary : 'white'} size="small" />
-          ) : (
-            <>
-              <Ionicons
-                name={
-                  event.privacyLevel === 'private' && !event.hasAccess
-                    ? 'lock-closed'
-                    : isRegistered
-                      ? 'checkmark-circle'
-                      : 'add-circle-outline'
-                }
-                size={20}
-                color={
-                  event.privacyLevel === 'private' && !event.hasAccess
-                    ? AppColors.textMedium
-                    : isRegistered
-                      ? AppColors.primary
-                      : 'white'
-                }
-                style={{ marginRight: 8 }}
-              />
-              <Text
-                style={[
-                  styles.registerBtnText,
-                  isRegistered && styles.unregisterBtnText,
-                  event.privacyLevel === 'private' && !event.hasAccess && styles.disabledRegisterBtnText
-                ]}
-              >
-                {status.label === 'Past'
-                  ? 'This event has ended'
-                  : event.privacyLevel === 'private' && !event.hasAccess
-                    ? '🔒 Registration Restricted'
+        {!event.hasAccess ? (
+          // Locked state — no access (private or members-only event)
+          <View style={styles.lockedCtaWrapper}>
+            <View style={styles.lockedCtaIcon}>
+              <Ionicons name="lock-closed" size={18} color="#9CA3AF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lockedCtaTitle}>Registration Restricted</Text>
+              <Text style={styles.lockedCtaSubtitle}>
+                {(event.privacyLevel || event.privacy_level) === 'private'
+                  ? 'This is a private event — authorised members only.'
+                  : 'This event is open to group/association members only.'}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[
+              styles.registerBtn,
+              isRegistered && styles.unregisterBtn,
+              status.label === 'Past' && styles.disabledRegisterBtn,
+            ]}
+            onPress={handleRegister}
+            disabled={isRegistering || status.label === 'Past'}
+            activeOpacity={0.85}
+          >
+            {isRegistering ? (
+              <ActivityIndicator color={isRegistered ? AppColors.primary : 'white'} size="small" />
+            ) : (
+              <>
+                <Ionicons
+                  name={
+                    status.label === 'Past'
+                      ? 'time-outline'
+                      : isRegistered
+                        ? 'checkmark-circle'
+                        : 'add-circle-outline'
+                  }
+                  size={20}
+                  color={
+                    status.label === 'Past'
+                      ? AppColors.textMedium
+                      : isRegistered
+                        ? AppColors.primary
+                        : 'white'
+                  }
+                  style={{ marginRight: 8 }}
+                />
+                <Text
+                  style={[
+                    styles.registerBtnText,
+                    isRegistered && styles.unregisterBtnText,
+                    status.label === 'Past' && styles.disabledRegisterBtnText,
+                  ]}
+                >
+                  {status.label === 'Past'
+                    ? 'This event has ended'
                     : isRegistered
                       ? 'Unregister / Cancel'
                       : 'Register Now'}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* ── Tag Management Modal ── */}
+      <TagManagementModal
+        visible={tagsModalVisible}
+        onClose={() => setTagsModalVisible(false)}
+        targetType="event"
+        targetId={eventId}
+        targetTitle={event?.title || 'Event'}
+      />
     </View>
   );
 };
@@ -1186,9 +2059,41 @@ const styles = StyleSheet.create({
     shadowColor: 'transparent',
     borderColor: '#D1D5DB',
     borderWidth: 1,
+    opacity: 0.7,
   },
   disabledRegisterBtnText: {
-    color: AppColors.textMedium,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  lockedCtaWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  lockedCtaIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedCtaTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  lockedCtaSubtitle: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    lineHeight: 16,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -1387,6 +2292,527 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontSize: 12,
     fontWeight: '700',
+  },
+
+  // ── Report event ──
+  reportEventBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  reportEventBtnText: {
+    fontSize: 13,
+    color: '#EF4444',
+    fontWeight: '500',
+  },
+
+  // ── Comments Modal ──
+  commentsSheet: {
+    flex: 1,
+    backgroundColor: 'white',
+    marginTop: 80,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 16,
+  },
+  commentsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  commentsHeaderTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: AppColors.textDark,
+  },
+  commentsLoader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  commentsEmpty: {
+    alignItems: 'center',
+    paddingVertical: 48,
+    gap: 10,
+  },
+  commentsEmptyText: {
+    color: AppColors.textMedium,
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  commentItem: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  commentAvatarCol: { paddingTop: 2 },
+  commentAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  commentAvatarFallback: {
+    backgroundColor: AppColors.primary + '18',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commentAvatarInitial: {
+    color: AppColors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  commentBubble: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    borderTopLeftRadius: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  commentBubbleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  commentAuthor: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: AppColors.textDark,
+  },
+  editedTag: {
+    fontSize: 10,
+    color: AppColors.textLight,
+    fontStyle: 'italic',
+  },
+  commentContent: {
+    fontSize: 14,
+    color: AppColors.textDark,
+    lineHeight: 20,
+  },
+  commentActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 4,
+    paddingHorizontal: 4,
+    flexWrap: 'wrap',
+  },
+  commentReactBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  commentReactText: {
+    fontSize: 14,
+  },
+  commentReactCount: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    fontWeight: '600',
+  },
+  commentActionBtn: { paddingVertical: 2 },
+  commentActionText: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    fontWeight: '600',
+  },
+  commentTime: {
+    fontSize: 11,
+    color: AppColors.textLight,
+    marginLeft: 'auto',
+  },
+  repliesToggle: {
+    marginTop: 4,
+    marginLeft: 4,
+    paddingVertical: 2,
+  },
+  repliesToggleText: {
+    fontSize: 12,
+    color: AppColors.primary,
+    fontWeight: '600',
+  },
+  replyItem: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    marginLeft: 12,
+  },
+  replyAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  replyBubble: {
+    flex: 1,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    borderTopLeftRadius: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  replyAuthor: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: AppColors.textDark,
+    marginBottom: 1,
+  },
+  replyContent: {
+    fontSize: 13,
+    color: AppColors.textDark,
+    lineHeight: 18,
+  },
+  loadMoreBtn: {
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  loadMoreText: {
+    color: AppColors.primary,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  commentInputBar: {
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    backgroundColor: 'white',
+    paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+  },
+  commentReplyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: AppColors.primary + '12',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  commentReplyBannerText: {
+    fontSize: 12,
+    color: AppColors.primary,
+    fontWeight: '600',
+  },
+  commentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+  },
+  commentTextInput: {
+    flex: 1,
+    minHeight: 40,
+    maxHeight: 120,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: AppColors.textDark,
+  },
+  commentSendBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: AppColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carShareCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    padding: 16,
+    marginBottom: 16,
+  },
+  carShareHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  carShareIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: AppColors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  carShareInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  carShareTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: AppColors.textDark,
+  },
+  carShareDesc: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  carShareBtn: {
+    backgroundColor: AppColors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 44,
+    borderRadius: 10,
+    gap: 8,
+  },
+  carShareBtnText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  // ── Tab Switcher ──
+  tabContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 16,
+    gap: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+    gap: 6,
+  },
+  tabButtonActive: {
+    backgroundColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: AppColors.textMedium,
+  },
+  tabTextActive: {
+    color: AppColors.primary,
+    fontWeight: '800',
+  },
+  tabBadge: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  tabBadgeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+
+  // ── Share Feed Post ──
+  shareContainer: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 16,
+  },
+  shareTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: AppColors.textDark,
+    marginBottom: 8,
+  },
+  shareInput: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    color: AppColors.textDark,
+    minHeight: 70,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  previewContainer: {
+    marginTop: 10,
+    position: 'relative',
+    borderRadius: 12,
+    overflow: 'hidden',
+    height: 180,
+    backgroundColor: '#000',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  previewVideoOverlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  removePreviewBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  attachmentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    gap: 6,
+  },
+  attachmentBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: AppColors.textDark,
+  },
+  postButton: {
+    backgroundColor: AppColors.primary,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+  },
+  postButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  // ── Post Card ──
+  noPostsContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  noPostsText: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    textAlign: 'center',
+    marginTop: 10,
+    lineHeight: 18,
+  },
+  postCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F3F4F6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  postHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  postAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginRight: 10,
+  },
+  postAvatarPlaceholder: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: AppColors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  postAvatarText: {
+    color: 'white',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  postAuthorInfo: {
+    flex: 1,
+  },
+  postAuthorName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: AppColors.textDark,
+  },
+  postTime: {
+    fontSize: 11,
+    color: AppColors.textLight,
+    marginTop: 1,
+  },
+  postBody: {
+    fontSize: 14,
+    color: AppColors.textDark,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  postMedia: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  postActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+    paddingTop: 10,
+  },
+  postActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  postActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: AppColors.textMedium,
   },
 });
 

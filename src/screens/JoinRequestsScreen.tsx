@@ -18,10 +18,16 @@ import associationService, { JoinRequest, Role } from '../services/associationSe
 import { AppColors } from '../theme/colors';
 
 const ROLE_DISPLAY_NAMES: Record<string, string> = {
-  ADMIN_ASSO: 'Administrator',
+  ADMIN_ASSO: 'Association Administrator',
+  SOUS_ADMIN_ASSO: 'Sub-Admin',
   COORD_ASSO: 'Coordinator',
+  COORDINATOR_ASSO: 'Coordinator',
   VOLUNTEER_ASSO: 'Volunteer',
   VIEWER_ASSO: 'Member',
+  PROJECT_MANAGER_ASSO: 'Project Manager',
+  ADMIN_EVENT: 'Event Administrator',
+  USER: 'User',
+  CHATROOM_OWNER: 'Chatroom Owner',
 };
 
 export const JoinRequestsScreen = () => {
@@ -105,7 +111,7 @@ export const JoinRequestsScreen = () => {
         selectedRequest.id,
         selectedRole.id
       );
-      Alert.alert('Success', `${selectedRequest.user?.full_name || 'User'} has been approved as a ${ROLE_DISPLAY_NAMES[selectedRole.name] || selectedRole.name}.`);
+      Alert.alert('Success', `${selectedRequest.user?.full_name || 'User'} has been approved as a ${selectedRole.displayName || selectedRole.display_name || ROLE_DISPLAY_NAMES[selectedRole.name] || selectedRole.name}.`);
       fetchRequests();
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to approve request.');
@@ -260,7 +266,7 @@ export const JoinRequestsScreen = () => {
             <View style={styles.rolesList}>
               {roles.map((role) => {
                 const isSelected = selectedRole?.id === role.id;
-                const displayName = ROLE_DISPLAY_NAMES[role.name] || role.name;
+                const displayName = role.displayName || role.display_name || ROLE_DISPLAY_NAMES[role.name] || role.name;
                 return (
                   <TouchableOpacity
                     key={role.id}

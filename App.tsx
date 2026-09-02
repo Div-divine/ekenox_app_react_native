@@ -18,6 +18,7 @@ import { ChatRoomScreen } from './src/screens/ChatRoomScreen';
 import { MessagesScreen } from './src/screens/MessagesScreen';
 import { JoinRequestsScreen } from './src/screens/JoinRequestsScreen';
 import CreatePostScreen from './src/screens/CreatePostScreen';
+import CommentsScreen from './src/screens/CommentsScreen';
 import CreateGroupScreen from './src/screens/CreateGroupScreen';
 import NotificationScreen from './src/screens/NotificationScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
@@ -34,7 +35,23 @@ import PrivacySettingsScreen from './src/screens/PrivacySettingsScreen';
 import AccountSecurityScreen from './src/screens/AccountSecurityScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import CreateStoryScreen from './src/screens/CreateStoryScreen';
+import ChatRoomDetailScreen from './src/screens/ChatRoomDetailScreen';
+import { ChallengeDetailScreen } from './src/screens/ChallengeDetailScreen';
+import CollaborationScreen from './src/screens/CollaborationScreen';
 import { AppColors } from './src/theme/colors';
+
+// Car share and verification screens
+import UserVerificationScreen from './src/screens/UserVerificationScreen';
+import DriverLicenseVerificationScreen from './src/screens/DriverLicenseVerificationScreen';
+import VehicleVerificationScreen from './src/screens/VehicleVerificationScreen';
+import EventCarSharesScreen from './src/screens/EventCarSharesScreen';
+import CreateCarShareScreen from './src/screens/CreateCarShareScreen';
+import CarShareDetailScreen from './src/screens/CarShareDetailScreen';
+import MyCarSharesScreen from './src/screens/MyCarSharesScreen';
+import AdminVerificationsScreen from './src/screens/admin/AdminVerificationsScreen';
+import AdminCarSharesScreen from './src/screens/admin/AdminCarSharesScreen';
+import AdminChallengesScreen from './src/screens/admin/AdminChallengesScreen';
+import AdminUsersScreen from './src/screens/admin/AdminUsersScreen';
 
 const AppStack = createStackNavigator();
 
@@ -42,6 +59,7 @@ const AuthenticatedNavigator = () => {
   return (
     <AppStack.Navigator screenOptions={{ headerShown: false }}>
       <AppStack.Screen name="MainTabs" component={MainTabNavigator} />
+      <AppStack.Screen name="ChallengeDetail" component={ChallengeDetailScreen} />
       <AppStack.Screen name="Feed" component={FeedScreen} />
       <AppStack.Screen name="GroupDetail" component={GroupDetailScreen} />
       <AppStack.Screen name="Events" component={EventsScreen} />
@@ -52,9 +70,12 @@ const AuthenticatedNavigator = () => {
       <AppStack.Screen name="Messages" component={MessagesScreen} />
       <AppStack.Screen name="JoinRequests" component={JoinRequestsScreen} />
       <AppStack.Screen name="CreatePost" component={CreatePostScreen} />
+      <AppStack.Screen name="Comments" component={CommentsScreen} />
       <AppStack.Screen name="CreateGroup" component={CreateGroupScreen} />
       <AppStack.Screen name="Notifications" component={NotificationScreen} />
       <AppStack.Screen name="Profile" component={ProfileScreen} />
+      <AppStack.Screen name="Collaboration" component={CollaborationScreen} />
+      <AppStack.Screen name="CollaborationHub" component={CollaborationScreen} />
       <AppStack.Screen name="CreateEvent" component={CreateEventScreen} />
       <AppStack.Screen name="MyEvents" component={MyEventsScreen} />
       <AppStack.Screen name="AdminDashboard" component={AdminDashboardScreen} />
@@ -68,6 +89,24 @@ const AuthenticatedNavigator = () => {
       <AppStack.Screen name="AccountSecurity" component={AccountSecurityScreen} />
       <AppStack.Screen name="Settings" component={SettingsScreen} />
       <AppStack.Screen name="CreateStory" component={CreateStoryScreen} />
+      <AppStack.Screen name="ChatRoomDetail" component={ChatRoomDetailScreen} />
+      
+      {/* Verification Screens */}
+      <AppStack.Screen name="UserVerification" component={UserVerificationScreen} />
+      <AppStack.Screen name="DriverLicenseVerification" component={DriverLicenseVerificationScreen} />
+      <AppStack.Screen name="VehicleVerification" component={VehicleVerificationScreen} />
+
+      {/* Car share Screens */}
+      <AppStack.Screen name="EventCarShares" component={EventCarSharesScreen} />
+      <AppStack.Screen name="CreateCarShare" component={CreateCarShareScreen} />
+      <AppStack.Screen name="CarShareDetail" component={CarShareDetailScreen} />
+      <AppStack.Screen name="MyCarShares" component={MyCarSharesScreen} />
+
+      {/* Admin Sub-Screens */}
+      <AppStack.Screen name="AdminVerifications" component={AdminVerificationsScreen} />
+      <AppStack.Screen name="AdminCarShares" component={AdminCarSharesScreen} />
+      <AppStack.Screen name="AdminChallenges" component={AdminChallengesScreen} />
+      <AppStack.Screen name="AdminUsers" component={AdminUsersScreen} />
     </AppStack.Navigator>
   );
 };

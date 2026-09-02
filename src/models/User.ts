@@ -20,6 +20,9 @@ export interface User {
   hasSeenOnboarding: boolean;
   isEmailVerified: boolean;
   emailVerifiedAt?: string;
+  phone?: string;
+  isPhoneVerified?: boolean;
+  phoneVerifiedAt?: string;
 
   // Extended fields for social features
   pseudo?: string;
@@ -65,13 +68,27 @@ export function parseUserFromJson(json: any): User {
   const isFollowing = followStatus === 'following' || !!json.is_following;
   const isPending = followStatus === 'pending' || !!json.is_pending;
 
+  let parsedRoles: string[] = [];
+  if (Array.isArray(json.roles)) {
+    parsedRoles = json.roles.map((r: any) => (typeof r === 'object' && r?.name ? r.name : String(r)));
+  } else if (Array.isArray(json.user_roles)) {
+    parsedRoles = json.user_roles.map((r: any) => (typeof r === 'object' && r?.name ? r.name : String(r)));
+  } else if (Array.isArray(json.userRoles)) {
+    parsedRoles = json.userRoles.map((r: any) => (typeof r === 'object' && r?.name ? r.name : String(r)));
+  } else if (typeof json.role === 'string') {
+    parsedRoles = [json.role];
+  }
+
   return {
     id: json.id,
     email: json.email,
-    fullName: json.full_name,
-    profileImage: json.profile_image,
-    isActive: json.is_active ?? true,
-    roles: Array.isArray(json.roles) ? json.roles.map((r: any) => String(r)) : [],
+    fullName: json.full_name || json.fullName,
+    phone: json.phone,
+    isPhoneVerified: !!json.is_phone_verified,
+    phoneVerifiedAt: json.phone_verified_at,
+    profileImage: json.profile_image || json.profileImage,
+    isActive: json.is_active ?? json.isActive ?? true,
+    roles: parsedRoles,
     createdAt: json.created_at || new Date().toISOString(),
     socialAccounts: Array.isArray(json.social_accounts)
       ? json.social_accounts.map((sa: any) => ({

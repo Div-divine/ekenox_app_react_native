@@ -4,7 +4,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   ScrollView,
   Image,
@@ -18,6 +17,7 @@ import {
   Modal,
   TextInput,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
 import { ApiConfig } from '../config/api';
@@ -25,10 +25,11 @@ import feedService, { Feed, Group, Event } from '../services/feedService';
 import associationService from '../services/associationService';
 import { FeedPollWidget } from './FeedPollWidget';
 import { useAuth } from '../context/AuthContext';
+import * as ImagePicker from 'expo-image-picker';
+import { UrlHelper } from '../utils/urlHelper';
+import { CustomActionSheetModal, ActionSheetOption } from '../components/CustomActionSheetModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-import { UrlHelper } from '../utils/urlHelper';
 
 // Cohesive Media URL Resolver leveraging the global UrlHelper utility
 const resolveMediaUrl = (url?: string) => {
@@ -83,6 +84,8 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
   const [editAllowMemberInvites, setEditAllowMemberInvites] = useState(true);
   const [editRequireJoinApproval, setEditRequireJoinApproval] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [editCoverImage, setEditCoverImage] = useState<{ uri: string; type: string; name: string } | null>(null);
+  const [editProfileImage, setEditProfileImage] = useState<{ uri: string; type: string; name: string } | null>(null);
 
 
   // Delegation states
@@ -91,6 +94,18 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
   const [sentDelegation, setSentDelegation] = useState<any | null>(null);
   const [receivedDelegation, setReceivedDelegation] = useState<any | null>(null);
   const [delegationLoading, setDelegationLoading] = useState(false);
+
+  // Custom Action Sheet Modal State
+  const [actionSheetConfig, setActionSheetConfig] = useState<{
+    visible: boolean;
+    title: string;
+    subtitle?: string;
+    options: ActionSheetOption[];
+  }>({
+    visible: false,
+    title: 'Select an Action',
+    options: [],
+  });
 
   const loadDelegationStatus = async () => {
     try {
@@ -433,12 +448,14 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
   const handleLikePost = async (postId: string | number) => {
     setGroupFeeds(prevPosts =>
       prevPosts.map(post => {
-        if (post.id === postId) {
+        if (post && post.id === postId) {
           const newIsLiked = !post.is_liked;
+          const currentCount = post.likes_count ?? post.stats?.reactions ?? 0;
           return {
             ...post,
             is_liked: newIsLiked,
-            likes_count: newIsLiked ? post.likes_count + 1 : Math.max(0, post.likes_count - 1),
+            user_reacted: newIsLiked,
+            likes_count: newIsLiked ? currentCount + 1 : Math.max(0, currentCount - 1),
           };
         }
         return post;
@@ -446,14 +463,15 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
     );
 
     const result = await feedService.toggleReaction(postId);
-    if (result.success) {
+    if (result && result.success) {
       setGroupFeeds(prevPosts =>
         prevPosts.map(post => {
-          if (post.id === postId) {
+          if (post && post.id === postId) {
             return {
               ...post,
               is_liked: result.isLiked,
-              likes_count: result.likesCount,
+              user_reacted: result.isLiked,
+              likes_count: result.likesCount ?? post.likes_count,
             };
           }
           return post;
@@ -518,18 +536,21 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
   // Report feed post
   const handleReportPost = (postId: string | number) => {
     const reasons = [
-      { text: 'Spam or unwanted', reason: 'spam' },
-      { text: 'Harassment or abuse', reason: 'harassment' },
-      { text: 'Inappropriate content', reason: 'inappropriate' },
-      { text: 'Illegal content', reason: 'illigal_content' },
-      { text: 'Other reason', reason: 'other' },
+      { text: 'Spam or unwanted promotion', reason: 'spam', icon: 'mail-unread-outline' as const },
+      { text: 'Harassment, bullying or abuse', reason: 'harassment', icon: 'hand-left-outline' as const },
+      { text: 'Inappropriate or offensive content', reason: 'inappropriate', icon: 'warning-outline' as const },
+      { text: 'Illegal content or counterfeit', reason: 'illigal_content', icon: 'shield-outline' as const },
+      { text: 'Other violation', reason: 'other', icon: 'alert-circle-outline' as const },
     ];
 
-    Alert.alert(
-      'Report Post',
-      'Select a reason for reporting this post:',
-      reasons.map(r => ({
-        text: r.text,
+    setActionSheetConfig({
+      visible: true,
+      title: 'Report Post',
+      subtitle: 'Select a reason for reporting this post:',
+      options: reasons.map(r => ({
+        title: r.text,
+        icon: r.icon,
+        isDestructive: true,
         onPress: async () => {
           const success = await feedService.reportFeed(postId, r.reason);
           if (success) {
@@ -538,25 +559,58 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
             Alert.alert('Error', 'Failed to submit report.');
           }
         },
-      }))
-    );
+      })),
+    });
   };
 
   // Options Menu sheet triggers
   const handleOpenPostOptions = (post: Feed) => {
-    const isMine = (post.user?.id && String(post.user.id) === String(user?.id)) || (post.author?.id && String(post.author.id) === String(user?.id));
+    if (!post) return;
+    const authorId = post.user?.id || post.author?.id;
+    const isMine = authorId && user?.id && String(authorId) === String(user.id);
 
-    const options: any[] = [];
+    const options: ActionSheetOption[] = [];
+
+    // Copy Link
+    options.push({
+      title: 'Copy Link',
+      subtitle: 'Copy link to this post to clipboard',
+      icon: 'link-outline',
+      iconColor: '#0284C7',
+      onPress: () => handleCopyLink(post.id),
+    });
+
     if (isMine) {
-      options.push({ text: 'Edit Post', onPress: () => handleEditPost(post) });
-      options.push({ text: 'Delete Post', style: 'destructive', onPress: () => handleDeletePost(post.id) });
+      options.push({
+        title: 'Edit Post',
+        subtitle: 'Edit post text and content',
+        icon: 'create-outline',
+        iconColor: '#D97706',
+        onPress: () => handleEditPost(post),
+      });
+      options.push({
+        title: 'Delete Post',
+        subtitle: 'Permanently remove this post',
+        icon: 'trash-outline',
+        isDestructive: true,
+        onPress: () => handleDeletePost(post.id),
+      });
     } else {
-      options.push({ text: 'Report Post', onPress: () => handleReportPost(post.id) });
+      options.push({
+        title: 'Report Post',
+        subtitle: 'Flag inappropriate content to moderators',
+        icon: 'flag-outline',
+        isDestructive: true,
+        onPress: () => handleReportPost(post.id),
+      });
     }
-    options.push({ text: 'Copy Link', onPress: () => handleCopyLink(post.id) });
-    options.push({ text: 'Cancel', style: 'cancel' });
 
-    Alert.alert('Post Options', 'Select an action:', options);
+    setActionSheetConfig({
+      visible: true,
+      title: 'Post Options',
+      subtitle: 'Select an action to perform',
+      options,
+    });
   };
 
   // Vote on poll post
@@ -683,7 +737,28 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
     setEditRequirePostApproval(!!group.require_post_approval);
     setEditAllowMemberInvites(group.allow_member_invites !== false);
     setEditRequireJoinApproval(!!group.require_join_approval);
+    setEditCoverImage(null);
+    setEditProfileImage(null);
     setSettingsVisible(true);
+  };
+
+  const pickImage = async (type: 'cover' | 'profile') => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      aspect: type === 'cover' ? [16, 9] : [1, 1],
+      quality: 0.85,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      const file = {
+        uri: asset.uri,
+        type: 'image/jpeg',
+        name: asset.fileName || `${type}_${Date.now()}.jpg`,
+      };
+      if (type === 'cover') setEditCoverImage(file);
+      else setEditProfileImage(file);
+    }
   };
 
   const handleSaveSettings = async () => {
@@ -703,6 +778,8 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
         require_post_approval: editRequirePostApproval,
         allow_member_invites: editAllowMemberInvites,
         require_join_approval: editRequireJoinApproval,
+        coverImage: editCoverImage,
+        profileImage: editProfileImage,
       });
       if (result?.success) {
         Alert.alert('✅ Saved', 'Group settings updated successfully.');
@@ -882,6 +959,30 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
           )}
 
           <Text style={styles.groupDescription}>{group.description}</Text>
+
+          {/* Group rules */}
+          {(() => {
+            const rules = Array.isArray(group.rules)
+              ? group.rules
+              : typeof group.rules === 'string' && group.rules.trim()
+                ? group.rules.split(/\n/).map(r => r.replace(/^[-•*]\s*/, '')).filter(Boolean)
+                : [];
+            if (rules.length === 0) return null;
+            return (
+              <View style={styles.rulesCard}>
+                <Text style={styles.rulesTitle}>
+                  <Ionicons name="list" size={14} color={AppColors.primary} style={{ marginRight: 6 }} />
+                  Group Rules
+                </Text>
+                {rules.map((rule, idx) => (
+                  <View key={idx} style={styles.rulesRow}>
+                    <View style={styles.ruleDot} />
+                    <Text style={styles.rulesText}>{rule}</Text>
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
         </View>
 
         {/* Received Delegation Banner */}
@@ -900,7 +1001,7 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
                 <Text style={{ fontWeight: '700', color: AppColors.textDark }}>From:</Text> {receivedDelegation.sender?.full_name || 'Group Admin'} ({receivedDelegation.sender?.email || 'N/A'})
               </Text>
               <Text style={{ fontSize: 12, color: AppColors.textMedium, marginBottom: 4 }}>
-                <Text style={{ fontWeight: '700', color: AppColors.textDark }}>To:</Text> You ({currentUser?.email})
+                <Text style={{ fontWeight: '700', color: AppColors.textDark }}>To:</Text> You ({user?.email})
               </Text>
               <Text style={{ fontSize: 12, color: AppColors.textMedium, marginBottom: 4 }}>
                 <Text style={{ fontWeight: '700', color: AppColors.textDark }}>Role:</Text> Group Owner (Super Admin)
@@ -944,7 +1045,7 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
 
             <View style={{ backgroundColor: 'white', borderRadius: 8, padding: 10, marginBottom: 10 }}>
               <Text style={{ fontSize: 12, color: AppColors.textMedium, marginBottom: 4 }}>
-                <Text style={{ fontWeight: '700', color: AppColors.textDark }}>Sent By:</Text> You ({currentUser?.full_name || currentUser?.email})
+                <Text style={{ fontWeight: '700', color: AppColors.textDark }}>Sent By:</Text> You ({(user as any)?.full_name || user?.fullName || user?.email})
               </Text>
               <Text style={{ fontSize: 12, color: AppColors.textMedium, marginBottom: 4 }}>
                 <Text style={{ fontWeight: '700', color: AppColors.textDark }}>Recipient:</Text> {sentDelegation.receiver?.full_name || sentDelegation.receiver_email} {sentDelegation.receiver?.email ? `(${sentDelegation.receiver.email})` : ''}
@@ -1133,64 +1234,64 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
                 const isActionLoading = eventActionLoadingId === event.id;
 
                 return (
-                  <View key={event.id} style={styles.groupEventCard}>
-                    {event.bannerImage || event.banner_image ? (
-                      <Image
-                        source={{ uri: resolveMediaUrl(event.bannerImage || event.banner_image) }}
-                        style={styles.groupEventImage}
-                      />
-                    ) : (
-                      <View style={[styles.groupEventImage, styles.eventPlaceholder]}>
-                        <Ionicons name="calendar" size={36} color={AppColors.textLight} />
-                      </View>
-                    )}
+                  <View key={event.id} style={styles.eventCard}>
+                    <View style={styles.imageWrapper}>
+                      {event.bannerImage || event.banner_image ? (
+                        <Image
+                          source={{ uri: resolveMediaUrl(event.bannerImage || event.banner_image) }}
+                          style={styles.eventCardImage}
+                        />
+                      ) : (
+                        <View style={[styles.eventCardImage, { backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Ionicons name="calendar" size={36} color={AppColors.textLight} />
+                        </View>
+                      )}
 
-                    <View style={[styles.groupEventStatusBadge, { backgroundColor: status.bg }]}>
-                      <Text style={[styles.groupEventStatusText, { color: status.color }]}>{status.label}</Text>
+                      <View style={[styles.statusTag, { backgroundColor: status.bg }]}>
+                        <Text style={[styles.statusTagText, { color: status.color }]}>{status.label}</Text>
+                      </View>
                     </View>
 
-                    <View style={styles.groupEventContent}>
-                      <Text style={styles.groupEventTitle}>{event.title}</Text>
+                    <View style={styles.eventCardContent}>
+                      <Text style={styles.eventCardTitle}>{event.title}</Text>
                       {event.description ? (
-                        <Text style={styles.groupEventDesc} numberOfLines={2}>{event.description}</Text>
+                        <Text style={styles.eventCardDesc} numberOfLines={2}>{event.description}</Text>
                       ) : null}
 
-                      <View style={styles.groupEventMetaRow}>
+                      <View style={styles.eventInfoRow}>
                         <Ionicons name="calendar-outline" size={14} color={AppColors.textMedium} />
-                        <Text style={styles.groupEventMetaText}>
-                          {formatEventDate(event.startTime || event.start_time)}
+                        <Text style={styles.eventInfoText}>
+                          {event.startTime || event.start_time ? new Date(event.startTime || event.start_time!).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'TBA'}
                         </Text>
                       </View>
 
-                      <View style={styles.groupEventMetaRow}>
+                      <View style={styles.eventInfoRow}>
                         <Ionicons name="location-outline" size={14} color={AppColors.textMedium} />
-                        <Text style={styles.groupEventMetaText} numberOfLines={1}>
+                        <Text style={styles.eventInfoText} numberOfLines={1}>
                           {event.location}
                         </Text>
                       </View>
 
-                      <View style={styles.groupEventFooterRow}>
-                        <View style={styles.groupEventMetaRow}>
-                          <Ionicons name="people-outline" size={14} color={AppColors.textMedium} />
-                          <Text style={styles.groupEventMetaText}>
-                            {event.registrationCount ?? event.registration_count ?? 0} attending
-                          </Text>
-                        </View>
-
-                        <TouchableOpacity
-                          style={[styles.eventRegisterBtn, isRegistered ? styles.eventUnregisterBtn : null]}
-                          onPress={() => handleToggleEventRegistration(event)}
-                          disabled={isActionLoading}
-                        >
-                          {isActionLoading ? (
-                            <ActivityIndicator color={isRegistered ? AppColors.textDark : 'white'} size="small" />
-                          ) : (
-                            <Text style={[styles.eventRegisterBtnText, isRegistered ? styles.eventUnregisterBtnText : null]}>
-                              {isRegistered ? 'Unregister' : 'Register Now'}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
+                      <View style={styles.eventInfoRow}>
+                        <Ionicons name="people-outline" size={14} color={AppColors.textMedium} />
+                        <Text style={styles.eventInfoText}>
+                          {event.registration_count ?? 0} attending
+                        </Text>
                       </View>
+
+                      <TouchableOpacity
+                        style={[styles.eventRegisterBtn, isRegistered ? styles.eventUnregisterBtn : null]}
+                        onPress={() => handleToggleRegistration(event)}
+                        disabled={isActionLoading}
+                      >
+                        {isActionLoading ? (
+                          <ActivityIndicator color={isRegistered ? AppColors.textDark : 'white'} size="small" />
+                        ) : (
+                          <Text style={[styles.eventRegisterBtnText, isRegistered ? styles.eventUnregisterBtnText : null]}>
+                            {isRegistered ? 'Unregister' : 'Register Now'}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
                     </View>
                   </View>
                 );
@@ -1222,30 +1323,35 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
 
                 return (
                   <View key={m.id} style={styles.memberCard}>
-                    {avatarUri ? (
-                      <Image source={{ uri: resolveMediaUrl(avatarUri) }} style={styles.memberAvatar} />
-                    ) : (
-                      <View style={[styles.memberAvatar, styles.memberAvatarPlaceholder]}>
-                        <Text style={styles.memberAvatarInitials}>
-                          {(u?.full_name || '?').substring(0, 2).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={styles.memberInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <TouchableOpacity
+                      style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                      onPress={() => navigation.navigate('Profile', { userId: u?.id })}
+                      activeOpacity={0.7}
+                    >
+                      {avatarUri ? (
+                        <Image source={{ uri: resolveMediaUrl(avatarUri) }} style={styles.memberAvatar} />
+                      ) : (
+                        <View style={[styles.memberAvatar, styles.memberAvatarPlaceholder]}>
+                          <Text style={styles.memberAvatarInitials}>
+                            {(u?.full_name || '?').substring(0, 2).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.memberInfo}>
                         <Text style={styles.memberName}>{u?.full_name || 'Unknown'}</Text>
-                        {group?.user_membership?.role === 'ROLE_FEED_GROUP_SUPER_ADMIN' && u?.id !== user?.id && (
-                          <TouchableOpacity onPress={() => handleOpenMemberSettings(m)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                            <Ionicons name="ellipsis-vertical" size={14} color={AppColors.textMedium} />
-                          </TouchableOpacity>
-                        )}
+                        <View style={[styles.memberRoleBadge, isAdmin ? styles.memberRoleBadgeAdmin : null]}>
+                          <Text style={[styles.memberRoleText, isAdmin ? styles.memberRoleTextAdmin : null]}>
+                            {roleLabel}
+                          </Text>
+                        </View>
                       </View>
-                      <View style={[styles.memberRoleBadge, isAdmin ? styles.memberRoleBadgeAdmin : null]}>
-                        <Text style={[styles.memberRoleText, isAdmin ? styles.memberRoleTextAdmin : null]}>
-                          {roleLabel}
-                        </Text>
-                      </View>
-                    </View>
+                    </TouchableOpacity>
+
+                    {group?.user_membership?.role === 'ROLE_FEED_GROUP_SUPER_ADMIN' && u?.id !== user?.id && (
+                      <TouchableOpacity onPress={() => handleOpenMemberSettings(m)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ paddingHorizontal: 8 }}>
+                        <Ionicons name="ellipsis-vertical" size={14} color={AppColors.textMedium} />
+                      </TouchableOpacity>
+                    )}
                     <View style={styles.memberActions}>
                       {u?.id !== user?.id ? (
                         <>
@@ -1398,23 +1504,87 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
       <Modal
         visible={settingsVisible}
         animationType="slide"
-        transparent
+        transparent={false}
         onRequestClose={() => setSettingsVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: 0 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Group Settings</Text>
-              <TouchableOpacity onPress={() => setSettingsVisible(false)}>
-                <Ionicons name="close" size={24} color={AppColors.textDark} />
+        <SafeAreaView style={{ flex: 1, backgroundColor: 'white' }}>
+          {/* Full Screen Header */}
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: '#F0F0F0',
+            }}
+          >
+            <TouchableOpacity onPress={() => setSettingsVisible(false)} style={{ padding: 4 }}>
+              <Ionicons name="arrow-back" size={24} color={AppColors.textDark} />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: AppColors.textDark }}>
+              Edit Group Settings
+            </Text>
+            <TouchableOpacity
+              onPress={handleSaveSettings}
+              disabled={settingsSaving || !editName.trim() || !editDescription.trim()}
+              style={{ padding: 4 }}
+            >
+              {settingsSaving ? (
+                <ActivityIndicator size="small" color={AppColors.primary} />
+              ) : (
+                <Text style={{ fontSize: 15, fontWeight: '700', color: AppColors.primary }}>Done</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={{ paddingBottom: 40 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Cover & Profile Images Edit Area */}
+            <View style={{ position: 'relative', marginBottom: 20 }}>
+              {/* Cover Image Container */}
+              <TouchableOpacity style={styles.editCoverImageContainer} onPress={() => pickImage('cover')} activeOpacity={0.9}>
+                {editCoverImage ? (
+                  <Image source={{ uri: editCoverImage.uri }} style={styles.editCoverImage} />
+                ) : group?.cover_image_url ? (
+                  <Image source={{ uri: resolveMediaUrl(group.cover_image_url) }} style={styles.editCoverImage} />
+                ) : (
+                  <View style={styles.editCoverImagePlaceholder}>
+                    <Ionicons name="image-outline" size={32} color={AppColors.textMedium} />
+                    <Text style={styles.editCoverImagePlaceholderText}>Add cover photo</Text>
+                  </View>
+                )}
+                <View style={styles.editCoverCameraOverlay}>
+                  <Ionicons name="camera" size={16} color="white" />
+                </View>
               </TouchableOpacity>
+
+              {/* Profile Image Overlay Container */}
+              <View style={styles.editProfileImageWrapper}>
+                <TouchableOpacity style={styles.editProfileImageContainer} onPress={() => pickImage('profile')} activeOpacity={0.9}>
+                  {editProfileImage ? (
+                    <Image source={{ uri: editProfileImage.uri }} style={styles.editProfileImage} />
+                  ) : group?.profile_image_url ? (
+                    <Image source={{ uri: resolveMediaUrl(group.profile_image_url) }} style={styles.editProfileImage} />
+                  ) : (
+                    <View style={styles.editProfileImagePlaceholder}>
+                      <Text style={styles.editProfileInitials}>
+                        {group?.name ? group.name.substring(0, 2).toUpperCase() : 'EC'}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={styles.editProfileCameraOverlay}>
+                    <Ionicons name="camera" size={12} color="white" />
+                  </View>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <ScrollView
-              contentContainerStyle={{ paddingHorizontal: 4, paddingBottom: 40 }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
+            <View style={{ paddingHorizontal: 16 }}>
               {/* Name */}
               <Text style={styles.settingsFieldLabel}>Group Name *</Text>
               <TextInput
@@ -1530,9 +1700,9 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
                   : <Text style={styles.settingsSaveBtnText}>Save Changes</Text>
                 }
               </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </View>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
 
       {/* ──────── Ownership Delegation Modal ──────── */}
@@ -1623,6 +1793,16 @@ export const GroupDetailScreen = ({ route, navigation }: GroupDetailScreenProps)
           </View>
         </View>
       </Modal>
+
+      {/* Custom Action Sheet Modal */}
+      <CustomActionSheetModal
+        visible={actionSheetConfig.visible}
+        title={actionSheetConfig.title}
+        subtitle={actionSheetConfig.subtitle}
+        options={actionSheetConfig.options}
+        onClose={() => setActionSheetConfig(prev => ({ ...prev, visible: false }))}
+        cancelButtonText="Back"
+      />
     </SafeAreaView>
   );
 };
@@ -1695,13 +1875,95 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 20,
   },
-  // ── Settings modal styles ──
   settingsFieldLabel: {
     fontSize: 13,
     fontWeight: '700',
     color: AppColors.textDark,
     marginBottom: 6,
     marginTop: 14,
+  },
+  editCoverImageContainer: {
+    height: 160,
+    backgroundColor: '#FAFAFA',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  editCoverImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  editCoverImagePlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+  },
+  editCoverImagePlaceholderText: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  editCoverCameraOverlay: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editProfileImageWrapper: {
+    paddingLeft: 16,
+    marginTop: -40,
+  },
+  editProfileImageContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    borderColor: 'white',
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#FAFAFA',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+  },
+  editProfileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  editProfileImagePlaceholder: {
+    flex: 1,
+    backgroundColor: '#E6F4EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editProfileInitials: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#006d40',
+  },
+  editProfileCameraOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#006d40',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
   },
   settingsInput: {
     backgroundColor: '#FAFAFA',
@@ -1880,6 +2142,39 @@ const styles = StyleSheet.create({
     color: AppColors.textMedium,
     lineHeight: 20,
     marginTop: 12,
+  },
+  rulesCard: {
+    backgroundColor: '#F4F7F5',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#E4EAE6',
+  },
+  rulesTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: AppColors.textDark,
+    marginBottom: 10,
+  },
+  rulesRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 7,
+  },
+  ruleDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: AppColors.primary,
+    marginTop: 6,
+    marginRight: 9,
+  },
+  rulesText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: AppColors.textMedium,
   },
   tabSelectorRow: {
     flexDirection: 'row',

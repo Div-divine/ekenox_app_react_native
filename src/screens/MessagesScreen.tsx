@@ -104,6 +104,17 @@ const resolveName = (item: any, currentUser?: any): string => {
   return item.name || 'Direct Chat';
 };
 
+const resolveOtherUser = (item: any, currentUser?: any): any => {
+  if (Array.isArray(item.members)) {
+    const other = item.members.find((m: any) => {
+      const mId = m.user?.id || m.id;
+      return String(mId) !== String(currentUser?.id);
+    });
+    return other?.user || other;
+  }
+  return null;
+};
+
 const resolveAvatar = (item: any, currentUser?: any): string | null => {
   if (item.profileImage && String(item.profileImage).trim() !== '') {
     return UrlHelper.convertPathToUrl(item.profileImage);
@@ -178,11 +189,9 @@ export const MessagesScreen = () => {
   // ── Data loading ────────────────────────────────────────────────────────────
 
   const [apiTotalUnread, setApiTotalUnread] = useState(0);
+  const [visibleConversationCount, setVisibleConversationCount] = useState(15);
 
-  const loadData = useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
-
-    // 1. Fetch Conversations
+  const loadConversations = useCallback(async (refresh = true) => {
     try {
       const convData = await chatService.getConversations();
 
@@ -191,20 +200,31 @@ export const MessagesScreen = () => {
         : (convData?.conversations ?? convData?.data?.conversations ?? convData?.data ?? []);
 
       setConversations(list);
-      const q = searchQuery.trim().toLowerCase();
-      setFiltered(q ? list.filter((c: any) => resolveName(c, user).toLowerCase().includes(q)) : list);
-
-      setApiTotalUnread(
-        convData?.totalUnreadCount ??
-        convData?.total_unread_count ??
-        convData?.data?.totalUnreadCount ??
-        0
-      );
+      setVisibleConversationCount(15);
+      return list;
     } catch (e) {
       console.error('MessagesScreen load conversations error:', e);
+      return [];
+    }
+  }, []);
+
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setIsLoading(true);
+
+    // 1. Fetch Conversations (full list, displayed 15 at a time)
+    const list = await loadConversations();
+    const q = searchQuery.trim().toLowerCase();
+    setFiltered(q ? list.filter((c: any) => resolveName(c, user).toLowerCase().includes(q)) : list);
+
+    // 2. Fetch Total Unread Count from dedicated /unread endpoint
+    try {
+      const unread = await chatService.getTotalUnreadCount();
+      setApiTotalUnread(unread);
+    } catch (e) {
+      console.error('MessagesScreen load total unread error:', e);
     }
 
-    // 2. Fetch Pending Invites
+    // 3. Fetch Pending Invites
     try {
       const pInvites = await chatService.getPendingInvites();
       setPendingInvites(pInvites ?? []);
@@ -212,7 +232,7 @@ export const MessagesScreen = () => {
       console.error('MessagesScreen load pending invites error:', e);
     }
 
-    // 3. Fetch All Invites
+    // 4. Fetch All Invites
     try {
       const aInvites = await chatService.getAllUserInvites();
       setAllInvites(aInvites ?? []);
@@ -222,10 +242,11 @@ export const MessagesScreen = () => {
 
     setIsLoading(false);
     setRefreshing(false);
-  }, [searchQuery]);
+  }, [searchQuery, loadConversations]);
 
   const applyFilter = (q: string, rawList: any[] = conversations) => {
     const query = q.trim().toLowerCase();
+    setVisibleConversationCount(15);
     if (!query) { setFiltered(rawList); return; }
     setFiltered(
       rawList.filter(c => {
@@ -447,7 +468,9 @@ export const MessagesScreen = () => {
 
   // ── Render Helpers ──────────────────────────────────────────────────────────
 
-  const totalUnread = conversations.reduce((s, c) => s + (c.unreadCount ?? 0), 0);
+  const totalUnread = apiTotalUnread > 0
+    ? apiTotalUnread
+    : conversations.reduce((s, c) => s + (c.unreadCount ?? 0), 0);
 
   const renderAvatarView = (item: any, size = 52) => {
     const avatarUrl = resolveAvatar(item, user);
@@ -480,7 +503,25 @@ export const MessagesScreen = () => {
         activeOpacity={0.7}
         onPress={() => openChat(item)}
       >
-        {renderAvatarView(item)}
+        <TouchableOpacity
+          onPress={() => {
+            if (!item.isGroup) {
+              const otherUser = resolveOtherUser(item, user);
+              if (otherUser?.id) {
+                navigation.navigate('Profile', { userId: otherUser.id });
+              }
+            } else {
+              if (item.feed_group_id || item.feedGroupId) {
+                navigation.navigate('GroupDetail', { groupId: item.feed_group_id || item.feedGroupId });
+              } else if (item.association_id || item.associationId) {
+                navigation.navigate('AssociationDetail', { associationId: item.association_id || item.associationId });
+              }
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          {renderAvatarView(item)}
+        </TouchableOpacity>
 
         <View style={styles.convContent}>
           <View style={styles.convHeader}>
@@ -732,13 +773,26 @@ export const MessagesScreen = () => {
         </View>
       ) : (
         <FlatList
-          data={filtered}
+          data={filtered.slice(0, visibleConversationCount)}
           keyExtractor={item => String(item.id)}
           renderItem={renderConversation}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listPad}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[AppColors.primary]} />}
+          onEndReached={() => {
+            if (visibleConversationCount < filtered.length) {
+              setVisibleConversationCount(prev => prev + 15);
+            }
+          }}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={
+            visibleConversationCount < filtered.length ? (
+              <View style={{ height: 16 }}>
+                <ActivityIndicator size="small" color={AppColors.primary} style={{ marginVertical: 8 }} />
+              </View>
+            ) : null
+          }
         />
       )}
 
@@ -1198,7 +1252,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: '#111827' },
+  headerTitle: { fontSize: 19, fontWeight: '800', color: AppColors.primary },
   headerSub: { fontSize: 11, color: AppColors.primary, fontWeight: '600', marginTop: 1 },
   composeBtn: {
     width: 38, height: 38, borderRadius: 12,

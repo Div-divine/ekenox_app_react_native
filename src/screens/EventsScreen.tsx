@@ -9,7 +9,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   Image,
   Alert,
@@ -26,8 +25,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
 import feedService, { Event, PaginatedEvents } from '../services/feedService';
 import { useNavigation } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { UrlHelper } from '../utils/urlHelper';
+import { useAuth } from '../context/AuthContext';
 
 // ── platform geo ──────────────────────────────────────────────────────────────
 let Geolocation: any = null;
@@ -37,7 +37,7 @@ try {
   try {
     const expo = require('expo-location');
     Geolocation = { expo };
-  } catch {}
+  } catch { }
 }
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -78,26 +78,29 @@ const formatDateRange = (s: string, e: string) => {
 
 // ─── types ─────────────────────────────────────────────────────────────────────
 
-type TabKey = 'Ongoing' | 'Upcoming' | 'Nearby' | 'Registered';
+type TabKey = 'Ongoing' | 'Upcoming' | 'Nearby' | 'Registered' | 'My Events';
 
-const TABS: TabKey[] = ['Ongoing', 'Upcoming', 'Nearby', 'Registered'];
+const TABS: TabKey[] = ['Ongoing', 'Upcoming', 'Nearby', 'Registered', 'My Events'];
 
 const TAB_ICONS: Record<TabKey, { active: string; inactive: string }> = {
   Ongoing: { active: 'play-circle', inactive: 'play-circle-outline' },
   Upcoming: { active: 'calendar', inactive: 'calendar-outline' },
   Nearby: { active: 'location', inactive: 'location-outline' },
   Registered: { active: 'checkmark-circle', inactive: 'checkmark-circle-outline' },
+  'My Events': { active: 'person', inactive: 'person-outline' },
 };
 
 // ─── main screen ──────────────────────────────────────────────────────────────
 
 export const EventsScreen = () => {
-  const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
+  const { user } = useAuth();
 
   // ── state ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabKey>('Ongoing');
   const [isListView, setIsListView] = useState(true);
+  const [showFab, setShowFab] = useState(false);
 
   // Per-tab data maps
   const [eventsMap, setEventsMap] = useState<Record<TabKey, Event[]>>({
@@ -105,24 +108,28 @@ export const EventsScreen = () => {
     Upcoming: [],
     Nearby: [],
     Registered: [],
+    'My Events': [],
   });
   const [loadingMap, setLoadingMap] = useState<Record<TabKey, boolean>>({
     Ongoing: true,
     Upcoming: false,
     Nearby: false,
     Registered: false,
+    'My Events': false,
   });
   const [hasMoreMap, setHasMoreMap] = useState<Record<TabKey, boolean>>({
     Ongoing: false,
     Upcoming: false,
     Nearby: false,
     Registered: false,
+    'My Events': false,
   });
   const [offsetMap, setOffsetMap] = useState<Record<TabKey, number>>({
     Ongoing: 0,
     Upcoming: 0,
     Nearby: 0,
     Registered: 0,
+    'My Events': 0,
   });
   const [loadedTabs, setLoadedTabs] = useState<Set<TabKey>>(new Set());
 
@@ -130,6 +137,7 @@ export const EventsScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Event[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const searchTimer = useRef<any>(null);
 
   // Refreshing
@@ -168,6 +176,16 @@ export const EventsScreen = () => {
   useEffect(() => {
     scrollY.setValue(0);
   }, [activeTab, isListView]);
+
+  const handleScroll = (event: any) => {
+    const scrollOffset = event.nativeEvent.contentOffset.y;
+    scrollY.setValue(scrollOffset);
+    if (scrollOffset > 50) {
+      setShowFab(true);
+    } else {
+      setShowFab(false);
+    }
+  };
 
 
   // ── location permission ─────────────────────────────────────────────────────
@@ -215,6 +233,8 @@ export const EventsScreen = () => {
         } else if (tab === 'Registered') {
           const events = await feedService.getMyRegisteredEvents();
           result = { events, total: events.length, hasMore: false };
+        } else if (tab === 'My Events') {
+          result = await feedService.getMyOrganizedEvents(20, offset);
         }
 
         setEventsMap(prev => ({
@@ -281,10 +301,15 @@ export const EventsScreen = () => {
     }
     setIsSearching(true);
     searchTimer.current = setTimeout(async () => {
-      const results = await feedService.searchEvents(text.trim(), 20, 0);
-      setSearchResults(results);
-      setIsSearching(false);
-    }, 500);
+      try {
+        const results = await feedService.searchEvents(text.trim(), 20, 0);
+        setSearchResults(results || []);
+      } catch (e) {
+        console.warn('Search events error:', e);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 400);
   };
 
   // ── registration toggle ─────────────────────────────────────────────────────
@@ -338,7 +363,23 @@ export const EventsScreen = () => {
   };
 
   // ── rendered event list ─────────────────────────────────────────────────────
-  const displayedEvents = searchQuery.trim() ? searchResults : eventsMap[activeTab];
+  const displayedEvents = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return eventsMap[activeTab] || [];
+    }
+    if (searchResults.length > 0) {
+      return searchResults;
+    }
+    // Instant fallback filtering on currently loaded events to avoid blank screen
+    const currentList = eventsMap[activeTab] || [];
+    return currentList.filter(e =>
+      (e.title && e.title.toLowerCase().includes(q)) ||
+      (e.description && e.description.toLowerCase().includes(q)) ||
+      (e.location && e.location.toLowerCase().includes(q)) ||
+      (e.category && e.category.toLowerCase().includes(q))
+    );
+  }, [searchQuery, searchResults, eventsMap, activeTab]);
   const isCurrentLoading = loadingMap[activeTab];
 
   // ── calendar helpers ────────────────────────────────────────────────────────
@@ -376,23 +417,27 @@ export const EventsScreen = () => {
   // ─────────────────────────────────────────────────────────────────────────────
   const renderEventsHeader = () => (
     <>
-      {/* ── Search Bar ── */}
-      <View style={styles.searchWrap}>
-        <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search events…"
-          placeholderTextColor={AppColors.textMedium}
-          value={searchQuery}
-          onChangeText={handleSearchChange}
-          returnKeyType="search"
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => handleSearchChange('')}>
-            <Ionicons name="close-circle" size={18} color={AppColors.textMedium} />
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* ── Search Bar (toggled by icon) ── */}
+      {showSearch && (
+        <View style={styles.searchWrap}>
+          <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search events…"
+            placeholderTextColor={AppColors.textMedium}
+            value={searchQuery}
+            onChangeText={handleSearchChange}
+            returnKeyType="search"
+          />
+          {isSearching ? (
+            <ActivityIndicator size="small" color={AppColors.primary} style={{ marginRight: 4 }} />
+          ) : searchQuery.length > 0 ? (
+            <TouchableOpacity onPress={() => handleSearchChange('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={18} color={AppColors.textMedium} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      )}
 
       {/* ── Tab selector ── */}
       {!searchQuery.trim() && (
@@ -490,51 +535,42 @@ export const EventsScreen = () => {
             paddingTop: insets.top,
             height: 60 + insets.top,
             transform: [{ translateY: headerTranslateY }],
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 16,
           },
         ]}
       >
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Events</Text>
-        <View style={styles.backBtn} />
-      </Animated.View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Image
+            source={{
+              uri: resolveMediaUrl(user?.profileImage || user?.avatarUrl) || 'https://lh3.googleusercontent.com/aida-public/AB6AXuD902TkYI0b6_KRKtnLv9ekUyPn_e1-iyS3F9Mt8-jOxUbE_1FI8UooP95XuIbGDhFd1ELMSlDE4LDvXawkcdg80li_VvGAmUAAb22zzMsqO98JD_YzW5TxohR_wEZEphVly-CeasRgVMSsXhkjHccqEHuB9C3XhNA0C8_32DACGAIVUOl4vxTVhCoGxybxC9Zl-Wq93MJxUJRYk6jV_9VbWczwGRwpix7oGK86KoEx2-VlgW9qO4k2',
+            }}
+            style={{ width: 32, height: 32, borderRadius: 16 }}
+          />
+          <Text style={{ fontSize: 20, fontWeight: '700', color: '#006D40' }}>Ekenox</Text>
+        </View>
 
-      {/* Sticky Create Event Bar Overlay */}
-      {!isCurrentLoading && (
-        <Animated.View
-          style={[
-            styles.createEventBarCard,
-            {
-              position: 'absolute',
-              top: 60 + insets.top,
-              left: 0,
-              right: 0,
-              zIndex: 99,
-              marginVertical: 0,
-              paddingVertical: 8,
-              backgroundColor: '#F5F5F7',
-              opacity: absoluteBarOpacity,
-              transform: [{ translateY: createBarTranslateY }],
-            },
-          ]}
-        >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <TouchableOpacity
-            style={styles.createEventBarContent}
-            onPress={() => navigation.navigate('CreateEvent', { onSuccess: handleRefresh })}
-            activeOpacity={0.85}
+            style={styles.backBtn}
+            onPress={() => {
+              if (showSearch) { setShowSearch(false); handleSearchChange(''); }
+              else setShowSearch(true);
+            }}
           >
-            <View style={styles.createEventBarIconHolder}>
-              <Ionicons name="calendar" size={18} color={AppColors.primary} />
-            </View>
-            <Text style={styles.createEventBarInputPlaceholder}>Host an eco workshop, cleanup or meetup…</Text>
-            <View style={styles.createEventBarBtn}>
-              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-              <Text style={styles.createEventBarBtnText}>Create Event</Text>
-            </View>
+            <Ionicons name={showSearch ? 'close' : 'search'} size={22} color={AppColors.textDark} />
           </TouchableOpacity>
-        </Animated.View>
-      )}
+
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.navigate('CreateEvent')}
+          >
+            <Ionicons name="add-circle-outline" size={24} color={AppColors.primary} />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
 
       {/* ── Body ── */}
       {isCurrentLoading && eventsMap[activeTab].length === 0 ? (
@@ -544,11 +580,6 @@ export const EventsScreen = () => {
         </View>
       ) : activeTab === 'Nearby' && !location && !loadingMap['Nearby'] ? (
         <NearbyPermissionView onEnable={requestLocation} hasError={locationError} />
-      ) : isSearching ? (
-        <View style={[styles.loadingContainer, { paddingTop: 60 + insets.top }]}>
-          <ActivityIndicator color={AppColors.primary} size="small" />
-          <Text style={styles.loadingText}>Searching…</Text>
-        </View>
       ) : !isListView ? (
         // ── Calendar view
         <Animated.FlatList
@@ -576,10 +607,7 @@ export const EventsScreen = () => {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
           }
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: false }
-          )}
+          onScroll={handleScroll}
           scrollEventThrottle={16}
         />
       ) : (
@@ -596,16 +624,16 @@ export const EventsScreen = () => {
               onPress={() =>
                 navigation.navigate('EventDetail' as never, { eventId: item.id } as never)
               }
+              onCommunityPress={() =>
+                navigation.navigate('EventDetail' as never, { eventId: item.id, initialTab: 'community' } as never)
+              }
               onRegisterPress={() => handleToggleRegistration(item)}
             />
           )}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[AppColors.primary]} progressViewOffset={60 + insets.top} />
           }
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: false }
-          )}
+          onScroll={handleScroll}
           scrollEventThrottle={16}
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.4}
@@ -622,6 +650,17 @@ export const EventsScreen = () => {
         />
       )}
 
+      {/* Floating Action Button (FAB) for Creating Event */}
+      {showFab && (
+        <TouchableOpacity
+          style={[styles.fab, { bottom: 20 + (insets.bottom || 0) }]}
+          onPress={() => navigation.navigate('CreateEvent', { onSuccess: handleRefresh })}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="add" size={28} color="white" />
+        </TouchableOpacity>
+      )}
+
     </View>
   );
 };
@@ -632,11 +671,13 @@ const EventCard = ({
   event,
   actionLoadingId,
   onPress,
+  onCommunityPress,
   onRegisterPress,
 }: {
   event: Event;
   actionLoadingId: string | number | null;
   onPress: () => void;
+  onCommunityPress: () => void;
   onRegisterPress: () => void;
 }) => {
   const status = getStatusInfo(event);
@@ -676,11 +717,20 @@ const EventCard = ({
 
         {/* Creator / Organizer Header */}
         {(() => {
-          const creator = event.creator || event.organizer;
+          const creator = (event as any).creator || event.organizer;
           const creatorName = creator?.full_name || creator?.name || 'Organizer';
           const creatorImg = resolveMediaUrl(creator?.profile_image || creator?.avatar_url || creator?.image);
           return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}
+              onPress={() => {
+                const creatorId = creator?.user_id || creator?.id;
+                if (creatorId) {
+                  (navigation as any).navigate('Profile', { userId: creatorId });
+                }
+              }}
+              activeOpacity={0.7}
+            >
               {creatorImg ? (
                 <Image source={{ uri: creatorImg }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 6 }} />
               ) : (
@@ -691,9 +741,13 @@ const EventCard = ({
               <Text style={styles.cardOrganizer} numberOfLines={1}>
                 {creatorName}
               </Text>
-            </View>
+            </TouchableOpacity>
           );
         })()}
+
+        <Text style={styles.cardDescription} numberOfLines={2}>
+          {event.description || 'Participate in this eco-friendly event and make a positive impact.'}
+        </Text>
 
         <View style={styles.cardInfoRow}>
           <Ionicons name="time-outline" size={13} color={AppColors.primary} />
@@ -704,13 +758,13 @@ const EventCard = ({
 
         <View style={styles.cardInfoRow}>
           <Ionicons
-            name={event.privacy_level === 'private' || event.privacyLevel === 'private' ? "lock-closed-outline" : "location-outline"}
+            name={(event.location || '').startsWith('🔒') ? "lock-closed-outline" : "location-outline"}
             size={13}
             color={AppColors.primary}
           />
           <Text style={styles.cardInfoText} numberOfLines={1}>
-            {event.privacy_level === 'private' || event.privacyLevel === 'private'
-              ? '🔒 Private Location'
+            {(event.location || '').startsWith('🔒')
+              ? '🔒 Location hidden'
               : (event.location || 'Location TBD')}
           </Text>
         </View>
@@ -721,7 +775,48 @@ const EventCard = ({
             {event.attendees_count ?? event.attendeesCount ?? 0} attending
             {event.max_attendees ? ` / ${event.max_attendees} max` : ''}
           </Text>
+
+          {/* Mutual followers profile stack */}
+          {event.mutual_friends && event.mutual_friends.length > 0 && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+              {event.mutual_friends.slice(0, 3).map((friend: any, index: number) => {
+                const friendAvatar = resolveMediaUrl(friend.profile_image || friend.avatar_url || friend.avatarUrl);
+                return (
+                  <View
+                    key={friend.id || index}
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      borderWidth: 1.5,
+                      borderColor: 'white',
+                      marginLeft: index > 0 ? -8 : 0,
+                      backgroundColor: AppColors.primary,
+                      overflow: 'hidden',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {friendAvatar ? (
+                      <Image source={{ uri: friendAvatar }} style={{ width: '100%', height: '100%' }} />
+                    ) : (
+                      <Ionicons name="person" size={8} color="white" />
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          )}
         </View>
+
+        {event.car_share_count !== undefined && event.car_share_count > 0 ? (
+          <View style={styles.cardInfoRow}>
+            <Ionicons name="car-outline" size={13} color={AppColors.primary} />
+            <Text style={[styles.cardInfoText, { fontWeight: '600', color: AppColors.primary }]}>
+              {event.car_share_count} available ride{event.car_share_count > 1 ? 's' : ''} offered
+            </Text>
+          </View>
+        ) : null}
 
         {/* Categories */}
         {event.categories && event.categories.length > 0 && (
@@ -759,10 +854,19 @@ const EventCard = ({
           </TouchableOpacity>
 
           <TouchableOpacity
+            style={styles.feedQuickBtn}
+            onPress={onCommunityPress}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="chatbubbles-outline" size={15} color={AppColors.primary} />
+            <Text style={styles.feedQuickBtnText}>Feed</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={styles.detailBtn}
             onPress={onPress}
           >
-            <Text style={styles.detailBtnText}>View Details</Text>
+            <Text style={styles.detailBtnText}>Details</Text>
             <Ionicons name="chevron-forward" size={13} color={AppColors.primary} />
           </TouchableOpacity>
         </View>
@@ -937,6 +1041,7 @@ const EmptyState = ({ tab, hasSearch }: { tab: TabKey; hasSearch: boolean }) => 
     Upcoming: 'No upcoming events scheduled yet.',
     Nearby: 'No events found within 50 km of your location.',
     Registered: "You haven't registered for any eco initiatives yet.",
+    'My Events': "You haven't organized any eco initiatives yet.",
   };
   return (
     <View style={styles.emptyContainer}>
@@ -966,9 +1071,9 @@ const styles = StyleSheet.create({
   },
   backBtn: { padding: 6 },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '800',
-    color: AppColors.textDark,
+    color: AppColors.primary,
   },
 
   // Search
@@ -1176,6 +1281,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 8,
   },
+  cardDescription: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    lineHeight: 19,
+    marginBottom: 10,
+  },
   cardInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1236,6 +1347,22 @@ const styles = StyleSheet.create({
   },
   regBtnTextActive: {
     color: AppColors.primary,
+  },
+  feedQuickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    gap: 4,
+  },
+  feedQuickBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
   },
   detailBtn: {
     flexDirection: 'row',
@@ -1470,5 +1597,29 @@ const calStyles = StyleSheet.create({
     fontSize: 11,
     color: AppColors.textMedium,
     marginTop: 2,
+  },
+  cardDescription: {
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginTop: 2,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    backgroundColor: AppColors.primary,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.5,
+    zIndex: 100,
   },
 });

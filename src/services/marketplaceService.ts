@@ -13,9 +13,27 @@ async function getHeaders(): Promise<Record<string, string>> {
   };
 }
 
+export interface Product {
+  id: number | string;
+  title: string;
+  price?: number;
+  [key: string]: any;
+}
+
+export interface CartItem {
+  product: Product;
+  quantity: number;
+  [key: string]: any;
+}
+
+export interface Order {
+  id: number | string;
+  [key: string]: any;
+}
+
 export interface ProductFilterParams {
   listing_type?: string;
-  category_id?: number;
+  category_id?: number | number[] | string;
   quality_id?: number;
   status?: string;
   search?: string;
@@ -42,10 +60,35 @@ class MarketplaceService {
     return res.data;
   }
 
-  async createProduct(data: any): Promise<any> {
+  async getProductDetail(id: number | string): Promise<any> {
+    return this.getProduct(id);
+  }
+
+  async createProduct(data: any, imageUri?: string): Promise<any> {
     const headers = await getHeaders();
-    const res = await axios.post(`${BASE}/products`, data, { headers });
-    return res.data;
+    if (imageUri && !imageUri.startsWith('http')) {
+      const formData = new FormData();
+      formData.append('data', JSON.stringify(data));
+      const filename = imageUri.split('/').pop() || 'photo.jpg';
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : `image/jpeg`;
+      formData.append('images[0]', {
+        uri: imageUri,
+        name: filename,
+        type,
+      } as any);
+      const res = await axios.post(`${BASE}/products`, formData, {
+        headers: {
+          ...headers,
+          'Content-Type': 'multipart/form-data',
+        },
+        transformRequest: (d) => d,
+      });
+      return res.data;
+    } else {
+      const res = await axios.post(`${BASE}/products`, data, { headers });
+      return res.data;
+    }
   }
 
   async updateProduct(id: number | string, data: any): Promise<any> {
@@ -195,10 +238,31 @@ class MarketplaceService {
     return res.data;
   }
 
-  async createWorkshop(data: any): Promise<any> {
+  async createWorkshop(data: any, imageUri?: string): Promise<any> {
     const headers = await getHeaders();
-    const res = await axios.post(`${BASE}/workshops`, data, { headers });
-    return res.data;
+    if (imageUri && !imageUri.startsWith('http')) {
+      const formData = new FormData();
+      formData.append('data', JSON.stringify(data));
+      const filename = imageUri.split('/').pop() || 'photo.jpg';
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : `image/jpeg`;
+      formData.append('image', {
+        uri: imageUri,
+        name: filename,
+        type,
+      } as any);
+      const res = await axios.post(`${BASE}/workshops`, formData, {
+        headers: {
+          ...headers,
+          'Content-Type': 'multipart/form-data',
+        },
+        transformRequest: (d) => d,
+      });
+      return res.data;
+    } else {
+      const res = await axios.post(`${BASE}/workshops`, data, { headers });
+      return res.data;
+    }
   }
 
   async getMyWorkshopRegistrations(): Promise<any[]> {
@@ -249,6 +313,38 @@ class MarketplaceService {
   async bookSlot(slotId: number | string, data: any): Promise<any> {
     const headers = await getHeaders();
     const res = await axios.post(`${BASE}/products/slots/${slotId}/book`, data, { headers });
+    return res.data;
+  }
+
+  // ── Repair Offers ──
+  async getRepairOffers(status?: string, page = 1, limit = 20): Promise<any> {
+    const headers = await getHeaders();
+    const params = { ...(status ? { status } : {}), page, limit };
+    const res = await axios.get(`${BASE}/products/repair-offers`, { headers, params });
+    return res.data;
+  }
+
+  async createRepairOffer(data: any): Promise<any> {
+    const headers = await getHeaders();
+    const res = await axios.post(`${BASE}/products/repair-offers`, data, { headers });
+    return res.data;
+  }
+
+  async acceptRepairOffer(id: number | string, responseMessage?: string): Promise<any> {
+    const headers = await getHeaders();
+    const res = await axios.post(`${BASE}/products/repair-offers/${id}/accept`, { response_message: responseMessage }, { headers });
+    return res.data;
+  }
+
+  async declineRepairOffer(id: number | string, responseMessage?: string): Promise<any> {
+    const headers = await getHeaders();
+    const res = await axios.post(`${BASE}/products/repair-offers/${id}/decline`, { response_message: responseMessage }, { headers });
+    return res.data;
+  }
+
+  async cancelRepairOffer(id: number | string): Promise<any> {
+    const headers = await getHeaders();
+    const res = await axios.post(`${BASE}/products/repair-offers/${id}/cancel`, {}, { headers });
     return res.data;
   }
 }

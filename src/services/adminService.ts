@@ -47,7 +47,6 @@ class AdminService {
       });
 
       if (response.status === 200) {
-        // Handle response with or without success wrapping
         const resData = response.data;
         return resData.data ?? resData;
       }
@@ -56,6 +55,114 @@ class AdminService {
       console.error('❌ Error fetching admin dashboard data:', error.response?.data || error.message);
       return null;
     }
+  }
+
+  // Verifications
+  public async getVerifications(status?: string): Promise<any> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/admin/verifications`, { headers, params: { status } });
+      return response.data;
+    } catch (e: any) {
+      return { success: false, driver_licenses: [], vehicles: [] };
+    }
+  }
+
+  public async getVerificationAuditLog(userId: number): Promise<any[]> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/admin/verifications/audit-log/${userId}`, { headers });
+      return response.data?.data || [];
+    } catch (e: any) {
+      return [];
+    }
+  }
+
+  public async verifyDriverLicense(id: number, approved: boolean, notes?: string): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.put(`${this.baseUrl}/admin/driver-licenses/${id}/verify`, { approved, notes }, { headers });
+    return response.data;
+  }
+
+  public async verifyVehicle(id: number, approved: boolean, notes?: string): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.put(`${this.baseUrl}/admin/vehicles/${id}/verify`, { approved, notes }, { headers });
+    return response.data;
+  }
+
+  public async verifyIdDocument(userId: number, approved: boolean, notes?: string): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.put(`${this.baseUrl}/admin/verifications/id/${userId}`, { approved, notes }, { headers });
+    return response.data;
+  }
+
+  public async verifyFaceMatch(userId: number, approved: boolean, notes?: string): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.put(`${this.baseUrl}/admin/verifications/face/${userId}`, { approved, notes }, { headers });
+    return response.data;
+  }
+
+  public async verifyPhone(userId: number, approved: boolean, notes?: string): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.put(`${this.baseUrl}/admin/verifications/phone/${userId}`, { approved, notes }, { headers });
+    return response.data;
+  }
+
+  // Car Shares
+  public async getCarShares(): Promise<any[]> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/admin/car-shares`, { headers });
+      return response.data?.data || [];
+    } catch (e: any) {
+      return [];
+    }
+  }
+
+  public async deleteCarShare(id: number): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.delete(`${this.baseUrl}/admin/car-shares/${id}`, { headers });
+    return response.data;
+  }
+
+  // Eco Challenges
+  public async getChallenges(): Promise<any[]> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/admin/challenges`, { headers });
+      return response.data?.data || [];
+    } catch (e: any) {
+      return [];
+    }
+  }
+
+  public async createChallenge(data: any): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.post(`${this.baseUrl}/admin/challenges`, data, { headers });
+    return response.data;
+  }
+
+  public async deleteChallenge(id: number): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.delete(`${this.baseUrl}/admin/challenges/${id}`, { headers });
+    return response.data;
+  }
+
+  // User Management
+  public async getUsers(q?: string): Promise<any[]> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/admin/users`, { headers, params: { q } });
+      return response.data?.data || [];
+    } catch (e: any) {
+      return [];
+    }
+  }
+
+  public async toggleUserBlock(userId: number): Promise<any> {
+    const headers = await this.getHeaders();
+    const response = await axios.post(`${this.baseUrl}/admin/users/${userId}/toggle-block`, {}, { headers });
+    return response.data;
   }
 }
 

@@ -20,10 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { AppColors } from '../theme/colors';
 import associationService from '../services/associationService';
 
-const CATEGORIES = [
-  'Conservation', 'Recycling', 'Clean Energy', 'Ocean Rescue',
-  'Advocacy', 'Education', 'Wildlife', 'Climate', 'Agriculture', 'Other',
-];
+// Dynamically loaded from backend
 
 const FOCUS_AREA_SUGGESTIONS = [
   'Reforestation', 'Ocean Cleanup', 'Solar Energy', 'Waste Reduction',
@@ -31,7 +28,7 @@ const FOCUS_AREA_SUGGESTIONS = [
   'Community Education', 'Policy Reform', 'Wildlife Protection', 'Urban Farming',
 ];
 
-// ─── Sub-components ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Sub-components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SectionLabel = ({ label, required }: { label: string; required?: boolean }) => (
   <Text style={styles.label}>
@@ -66,7 +63,7 @@ const Field = ({
   </View>
 );
 
-// ─── Main Screen ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ Main Screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const CreateAssociationScreen = () => {
   const navigation = useNavigation<any>();
@@ -110,6 +107,18 @@ export const CreateAssociationScreen = () => {
 
   // Submission
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [categories, setCategories] = useState<any[]>([]);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const list = await associationService.getCategories();
+        setCategories(list || []);
+      } catch (err) {
+        console.error('Failed to load categories', err);
+      }
+    })();
+  }, []);
 
   React.useEffect(() => {
     const initEdit = async () => {
@@ -128,7 +137,7 @@ export const CreateAssociationScreen = () => {
       if (assocData) {
         setIsEditMode(true);
         setName(assocData.name || '');
-        setCategory(assocData.category || '');
+        setCategory(assocData.category ? (assocData.category.id || assocData.category) : '');
         setShortTagline(assocData.short_tagline || '');
         setDescription(assocData.description || '');
         setMission(assocData.mission || '');
@@ -170,9 +179,7 @@ export const CreateAssociationScreen = () => {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: type === 'logo' ? [1, 1] : [16, 9],
-      quality: 0.8,
+      quality: 0.9,
     });
 
     if (!result.canceled && result.assets?.[0]) {
@@ -229,7 +236,7 @@ export const CreateAssociationScreen = () => {
 
       const payload: any = {
         name: name.trim(),
-        category,
+        category_id: typeof category === 'object' ? (category as any).id : category,
         short_tagline: shortTagline.trim() || undefined,
         description: description.trim(),
         mission: mission.trim(),
@@ -265,7 +272,7 @@ export const CreateAssociationScreen = () => {
       }
 
       Alert.alert(
-        isEditMode ? '🎉 Association Updated!' : '🎉 Association Created!',
+        isEditMode ? 'ðŸŽ‰ Association Updated!' : 'ðŸŽ‰ Association Created!',
         isEditMode
           ? `"${name}" has been updated successfully.`
           : `"${result.name}" has been created successfully.`,
@@ -296,7 +303,7 @@ export const CreateAssociationScreen = () => {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={[styles.container]}>
-        {/* ── Sticky Header ── */}
+        {/* â”€â”€ Sticky Header â”€â”€ */}
         <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
@@ -322,7 +329,7 @@ export const CreateAssociationScreen = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* ── Cover Image ── */}
+          {/* â”€â”€ Cover Image â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="images-outline" size={16} color={AppColors.primary} /> Cover & Logo
@@ -361,12 +368,12 @@ export const CreateAssociationScreen = () => {
               </TouchableOpacity>
               <View style={styles.logoHint}>
                 <Text style={styles.logoHintText}>Upload a square logo image (1:1 ratio)</Text>
-                <Text style={styles.logoHintSub}>Recommended: 400×400px, PNG or JPG</Text>
+                <Text style={styles.logoHintSub}>Recommended: 400Ã—400px, PNG or JPG</Text>
               </View>
             </View>
           </View>
 
-          {/* ── Basic Info ── */}
+          {/* â”€â”€ Basic Info â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="information-circle-outline" size={16} color={AppColors.primary} /> Basic Information
@@ -388,14 +395,14 @@ export const CreateAssociationScreen = () => {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.categoryRow}
               >
-                {CATEGORIES.map(cat => (
+                {categories.map(cat => (
                   <TouchableOpacity
-                    key={cat}
-                    style={[styles.categoryChip, category === cat && styles.categoryChipActive]}
-                    onPress={() => setCategory(cat)}
+                    key={cat.id}
+                    style={[styles.categoryChip, (category === cat.id || (typeof category === 'object' && (category as any).id === cat.id)) && styles.categoryChipActive]}
+                    onPress={() => setCategory(cat.id)}
                   >
-                    <Text style={[styles.categoryChipText, category === cat && styles.categoryChipTextActive]}>
-                      {cat}
+                    <Text style={[styles.categoryChipText, (category === cat.id || (typeof category === 'object' && (category as any).id === cat.id)) && styles.categoryChipTextActive]}>
+                      {cat.displayName || cat.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -437,7 +444,7 @@ export const CreateAssociationScreen = () => {
             />
           </View>
 
-          {/* ── Focus Areas ── */}
+          {/* â”€â”€ Focus Areas â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="leaf-outline" size={16} color={AppColors.primary} /> Focus Areas
@@ -485,7 +492,7 @@ export const CreateAssociationScreen = () => {
             )}
           </View>
 
-          {/* ── Achievements ── */}
+          {/* â”€â”€ Achievements â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="trophy-outline" size={16} color={AppColors.primary} /> Achievements
@@ -520,7 +527,7 @@ export const CreateAssociationScreen = () => {
             )}
           </View>
 
-          {/* ── Contact Info ── */}
+          {/* â”€â”€ Contact Info â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="call-outline" size={16} color={AppColors.primary} /> Contact Information
@@ -563,7 +570,7 @@ export const CreateAssociationScreen = () => {
             />
           </View>
 
-          {/* ── Social Media ── */}
+          {/* â”€â”€ Social Media â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="share-social-outline" size={16} color={AppColors.primary} /> Social Media
@@ -595,7 +602,7 @@ export const CreateAssociationScreen = () => {
             ))}
           </View>
 
-          {/* ── Privacy ── */}
+          {/* â”€â”€ Privacy â”€â”€ */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>
               <Ionicons name="lock-closed-outline" size={16} color={AppColors.primary} /> Privacy Settings
@@ -616,7 +623,7 @@ export const CreateAssociationScreen = () => {
             </View>
           </View>
 
-          {/* ── Create Button ── */}
+          {/* â”€â”€ Create Button â”€â”€ */}
           <TouchableOpacity
             style={[styles.createBtn, isSubmitting && { opacity: 0.7 }]}
             onPress={handleSubmit}
@@ -658,9 +665,9 @@ const styles = StyleSheet.create({
   },
   backBtn: { padding: 6 },
   headerTitle: {
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: '800',
-    color: AppColors.textDark,
+    color: AppColors.primary,
   },
   submitHdrBtn: {
     backgroundColor: AppColors.primary,

@@ -192,6 +192,18 @@ export default function SettingsScreen() {
                 <Ionicons name="chevron-forward" size={16} color={AppColors.textLight} />
               </View>
             </TouchableOpacity>
+
+            {/* Driver Verification */}
+            <TouchableOpacity style={styles.settingsRow} onPress={() => navigation.navigate('UserVerification')}>
+              <View style={styles.rowLeft}>
+                <Ionicons name="shield-checkmark-outline" size={20} color={AppColors.primary} />
+                <View style={styles.rowTextContainer}>
+                  <Text style={styles.rowTitle}>Driver Verification</Text>
+                  <Text style={styles.rowDesc}>Verify your phone, ID, driver's license & vehicle to offer rides.</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={AppColors.textLight} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.sectionHeader}>
@@ -263,9 +275,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: AppColors.textDark,
+    fontSize: 19,
+    fontWeight: '800',
+    color: AppColors.primary,
   },
   scrollContent: {
     paddingBottom: 40,

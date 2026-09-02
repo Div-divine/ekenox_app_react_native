@@ -15,6 +15,7 @@ import {
   Dimensions,
   Platform,
   Animated, StatusBar,
+  SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AppColors } from '../theme/colors';
@@ -33,10 +34,20 @@ const { width: SCREEN_W } = Dimensions.get('window');
 
 const resolveUrl = (url?: string) => UrlHelper.convertPathToUrl(url);
 
-const CATEGORIES = [
-  'All', 'Conservation', 'Recycling', 'Clean Energy', 'Ocean Rescue',
-  'Advocacy', 'Education', 'Wildlife', 'Climate', 'Agriculture', 'Other',
-];
+const ROLE_DISPLAY_NAMES: Record<string, string> = {
+  ADMIN_ASSO: 'Association Administrator',
+  SOUS_ADMIN_ASSO: 'Sub-Admin',
+  COORD_ASSO: 'Coordinator',
+  COORDINATOR_ASSO: 'Coordinator',
+  VOLUNTEER_ASSO: 'Volunteer',
+  VIEWER_ASSO: 'Member',
+  PROJECT_MANAGER_ASSO: 'Project Manager',
+  ADMIN_EVENT: 'Event Administrator',
+  USER: 'User',
+  CHATROOM_OWNER: 'Chatroom Owner',
+};
+
+// Dynamically loaded from backend
 
 type TabFilter = 'all' | 'mine';
 
@@ -67,7 +78,21 @@ export const AssociationScreen = () => {
   // Tabs & filters
   const [tabFilter, setTabFilter] = useState<TabFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [showSearch, setShowSearch] = useState(false);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
+  const [categoryDrawerVisible, setCategoryDrawerVisible] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cats = await associationService.getCategories();
+        setCategories(cats || []);
+      } catch (err) {
+        console.error('Failed to load categories', err);
+      }
+    })();
+  }, []);
 
   // Lists & data
   const [associations, setAssociations] = useState<Association[]>([]);
@@ -140,13 +165,26 @@ export const AssociationScreen = () => {
     extrapolate: 'clamp',
   });
 
+  const [showStickyBar, setShowStickyBar] = useState(false);
+
+  useEffect(() => {
+    const listenerId = scrollY.addListener(({ value }) => {
+      const threshold = START_Y - 20;
+      const isPast = value >= threshold;
+      setShowStickyBar(prev => (prev !== isPast ? isPast : prev));
+    });
+    return () => {
+      scrollY.removeListener(listenerId);
+    };
+  }, [scrollY, START_Y]);
+
   useEffect(() => {
     scrollY.setValue(0);
   }, [tabFilter]);
 
-  const loadAssociations = useCallback(async (opts?: { reset?: boolean; search?: string; category?: string; filter?: TabFilter }) => {
+  const loadAssociations = useCallback(async (opts?: { reset?: boolean; search?: string; category_id?: number[]; filter?: TabFilter }) => {
     const newPage = opts?.reset ? 1 : page;
-    const cat = opts?.category ?? selectedCategory;
+    const catIds = opts?.category_id !== undefined ? opts.category_id : selectedCategories;
     const q = opts?.search ?? searchQuery;
     const f = opts?.filter ?? tabFilter;
 
@@ -159,7 +197,7 @@ export const AssociationScreen = () => {
       } else {
         const result = await associationService.getAssociations({
           search: q || undefined,
-          category: cat !== 'All' ? cat : undefined,
+          category_id: catIds.length > 0 ? catIds : undefined,
           page: newPage,
           limit: 20,
         });
@@ -175,7 +213,7 @@ export const AssociationScreen = () => {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [page, selectedCategory, searchQuery, tabFilter]);
+  }, [page, selectedCategories, searchQuery, tabFilter]);
 
   const loadCountsAndBanners = async () => {
     try {
@@ -352,10 +390,19 @@ export const AssociationScreen = () => {
     }, 500);
   };
 
-  const handleCategoryChange = (cat: string) => {
-    setSelectedCategory(cat);
+  const toggleCategorySelection = (catId: number) => {
+    const next = selectedCategories.includes(catId)
+      ? selectedCategories.filter(id => id !== catId)
+      : [...selectedCategories, catId];
+    setSelectedCategories(next);
     setIsLoading(true);
-    loadAssociations({ reset: true, category: cat });
+    loadAssociations({ reset: true, category_id: next });
+  };
+
+  const clearCategoryFilters = () => {
+    setSelectedCategories([]);
+    setIsLoading(true);
+    loadAssociations({ reset: true, category_id: [] });
   };
 
   const handleToggleFavorite = async (assoc: Association) => {
@@ -548,6 +595,7 @@ export const AssociationScreen = () => {
 
     // Use profile_image if available, else logo_image, else fallback
     const resolvedImage = item.profile_image || item.logo_image;
+    const resolvedLogo = item.logo_image;
 
     return (
       <TouchableOpacity
@@ -555,67 +603,139 @@ export const AssociationScreen = () => {
         activeOpacity={0.92}
         onPress={() => navigation.navigate('AssociationDetail', { associationId: item.id })}
       >
-        {/* Floating Star Toggler (Favorite) inside card at top-right */}
-        <TouchableOpacity
-          style={styles.floatingStarBtn}
-          onPress={() => handleToggleFavorite(item)}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={item.is_favorited ? 'star' : 'star-outline'}
-            size={20}
-            color={item.is_favorited ? '#F59E0B' : AppColors.textMedium}
-          />
-        </TouchableOpacity>
+        {/* Banner Image */}
+        <View style={styles.cardImageWrap}>
+          {item.profile_image ? (
+            <Image
+              source={{ uri: resolveUrl(item.profile_image) }}
+              style={styles.cardImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={[styles.cardImage, styles.cardImageFallback]}>
+              <Ionicons name="business" size={48} color="white" style={{ opacity: 0.8 }} />
+            </View>
+          )}
 
-        {/* Card Content body */}
+          {/* Verification Badge */}
+          {item.is_verified && (
+            <View style={styles.verifiedBadge}>
+              <Ionicons name="checkmark-circle" size={11} color="white" />
+              <Text style={styles.verifiedText}>VERIFIED</Text>
+            </View>
+          )}
+
+          {/* Private Association Badge */}
+          {item.is_private && (
+            <View style={styles.privateBadge}>
+              <Ionicons name="lock-closed" size={11} color="white" />
+              <Text style={styles.privateText}>PRIVATE</Text>
+            </View>
+          )}
+
+          {/* Floating Star (Favorite) */}
+          <TouchableOpacity
+            style={styles.floatingStarBtn}
+            onPress={() => handleToggleFavorite(item)}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={item.is_favorited ? 'star' : 'star-outline'}
+              size={18}
+              color={item.is_favorited ? '#F59E0B' : 'white'}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* Content body */}
         <View style={styles.cardContent}>
-          <View style={styles.cardMainRow}>
-            {resolvedImage ? (
-              <Image source={{ uri: resolveUrl(resolvedImage) }} style={styles.cardLogo} />
+          <Text style={styles.cardTitle} numberOfLines={2}>{item.name}</Text>
+
+          {/* Organizer / Logo Row */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+            {resolvedLogo ? (
+              <Image source={{ uri: resolveUrl(resolvedLogo) }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 6 }} />
             ) : (
-              <View style={styles.cardLogoPlaceholder}>
-                <Ionicons name="business" size={18} color={AppColors.primary} />
+              <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: AppColors.primary, justifyContent: 'center', alignItems: 'center', marginRight: 6 }}>
+                <Ionicons name="business" size={12} color="white" />
               </View>
             )}
-
-            <View style={styles.cardTitleBlock}>
-              <View style={styles.nameRow}>
-                <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
-                {item.is_verified && (
-                  <Ionicons name="checkmark-circle" size={15} color="#1D4ED8" style={{ marginLeft: 4 }} />
-                )}
-                {item.is_private && (
-                  <View style={styles.privateAssoBadge}>
-                    <Ionicons name="lock-closed" size={10} color="#EF4444" style={{ marginRight: 2 }} />
-                    <Text style={styles.privateAssoBadgeText}>Private</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.cardCategoryText}>{item.category}</Text>
-              {item.short_tagline ? (
-                <Text style={styles.cardTagline} numberOfLines={1}>{item.short_tagline}</Text>
-              ) : null}
-            </View>
+            <Text style={styles.cardOrganizer} numberOfLines={1}>
+              {item.short_tagline || 'Verified Eco Association'}
+            </Text>
           </View>
 
-          {/* Member count & role row */}
-          <View style={styles.metaInfoRow}>
-            <View style={styles.membersIndicator}>
-              <Ionicons name="people-outline" size={14} color={AppColors.textMedium} />
-              <Text style={styles.membersIndicatorText}>{item.member_count} member{item.member_count > 1 ? 's' : ''}</Text>
-            </View>
+          {item.description ? (
+            <Text style={styles.cardDescription} numberOfLines={2}>
+              {item.description}
+            </Text>
+          ) : null}
 
-            {item.current_user_role && (
-              <View style={styles.roleLabelPill}>
-                <Text style={styles.roleLabelPillText}>
-                  {item.current_user_role === 'ADMIN_ASSO' ? 'Admin' : item.current_user_role === 'SOUS_ADMIN_ASSO' ? 'Sub-Admin' : item.current_user_role}
-                </Text>
+          {/* Info Rows */}
+          <View style={styles.cardInfoRow}>
+            <Ionicons name="pricetag-outline" size={13} color={AppColors.primary} />
+            <Text style={styles.cardInfoText} numberOfLines={1}>
+              Category: {typeof item.category === 'string' ? item.category : ((item.category as any)?.display_name || (item.category as any)?.name || 'Eco')}
+            </Text>
+          </View>
+
+          <View style={styles.cardInfoRow}>
+            <Ionicons name="location-outline" size={13} color={AppColors.primary} />
+            <Text style={styles.cardInfoText} numberOfLines={1}>
+              {item.address || 'Address TBD'}
+            </Text>
+          </View>
+
+          <View style={styles.cardInfoRow}>
+            <Ionicons name="people-outline" size={13} color={AppColors.primary} />
+            <Text style={styles.cardInfoText}>
+              {item.member_count} member{item.member_count > 1 ? 's' : ''}
+              {item.current_user_role ? `  •  Role: ${ROLE_DISPLAY_NAMES[item.current_user_role] || item.current_user_role}` : ''}
+            </Text>
+
+            {/* Mutual followers profile stack */}
+            {item.mutual_friends && item.mutual_friends.length > 0 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                {item.mutual_friends.slice(0, 3).map((friend: any, index: number) => {
+                  const friendAvatar = resolveUrl(friend.profile_image || friend.avatar_url || friend.avatarUrl);
+                  return (
+                    <View
+                      key={friend.id || index}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        borderWidth: 1.5,
+                        borderColor: 'white',
+                        marginLeft: index > 0 ? -8 : 0,
+                        backgroundColor: AppColors.primary,
+                        overflow: 'hidden',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                    >
+                      {friendAvatar ? (
+                        <Image source={{ uri: friendAvatar }} style={{ width: '100%', height: '100%' }} />
+                      ) : (
+                        <Ionicons name="person" size={8} color="white" />
+                      )}
+                    </View>
+                  );
+                })}
               </View>
             )}
           </View>
 
-          <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text>
+          {/* Focus Areas Chips */}
+          {item.focus_areas && item.focus_areas.length > 0 && (
+            <View style={styles.cardCatsRow}>
+              {item.focus_areas.slice(0, 3).map((area, idx) => (
+                <View key={idx} style={styles.catChip}>
+                  <Text style={styles.catChipText}>{area}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {hasInvite && !isMember && (
             <View style={styles.inlineInviteAlert}>
@@ -626,67 +746,72 @@ export const AssociationScreen = () => {
 
           <View style={styles.cardDivider} />
 
-          {/* Action buttons */}
-          <View style={styles.actionButtonsRow}>
+          {/* Footer Actions */}
+          <View style={styles.cardFooter}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 16 }}>
+              {/* Join Button */}
+              <TouchableOpacity
+                style={[
+                  styles.regBtn,
+                  isMember && styles.regBtnActive,
+                  hasPending && styles.regBtnPending
+                ]}
+                onPress={() => {
+                  if (isMember) {
+                    handleLeaveAssociation(item);
+                  } else if (hasPending) {
+                    handleCancelRequest(item.id);
+                  } else {
+                    handleJoinPress(item);
+                  }
+                }}
+                disabled={isLoader}
+              >
+                {isLoader ? (
+                  <ActivityIndicator color={isMember ? AppColors.primary : 'white'} size="small" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name={isMember ? 'checkmark-circle' : hasPending ? 'hourglass-outline' : 'add-circle-outline'}
+                      size={15}
+                      color={isMember ? AppColors.primary : hasPending ? '#D97706' : 'white'}
+                    />
+                    <Text
+                      style={[
+                        styles.regBtnText,
+                        isMember && styles.regBtnTextActive,
+                        hasPending && styles.regBtnTextPending
+                      ]}
+                    >
+                      {isMember ? 'Member' : hasPending ? 'Pending' : 'Join'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* Chat Button (Green with margin) */}
+              {item.chat_room && isMember && (
+                <TouchableOpacity
+                  style={[styles.regBtn, { backgroundColor: '#22C55E' }]}
+                  onPress={() => navigation.navigate('ChatRoom', {
+                    chatRoomId: item.chat_room!.id,
+                    name: item.name,
+                    logo: resolvedLogo,
+                  })}
+                >
+                  <Ionicons name="chatbubbles-outline" size={15} color="white" />
+                  <Text style={styles.regBtnText}>Chat</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Details Button */}
             <TouchableOpacity
-              style={styles.detailsActionBtn}
+              style={styles.detailBtn}
               onPress={() => navigation.navigate('AssociationDetail', { associationId: item.id })}
             >
-              <Text style={styles.detailsActionBtnText}>Details</Text>
+              <Text style={styles.detailBtnText}>View Details</Text>
               <Ionicons name="chevron-forward" size={13} color={AppColors.primary} />
-            </TouchableOpacity>
-
-            {item.chat_room && isMember && (
-              <TouchableOpacity
-                style={styles.chatActionBtn}
-                onPress={() => navigation.navigate('ChatRoom', {
-                  chatRoomId: item.chat_room!.id,
-                  name: item.name,
-                  logo: resolvedImage,
-                })}
-              >
-                <Ionicons name="chatbubbles-outline" size={14} color="white" />
-                <Text style={styles.chatActionBtnText}>Chat</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={[
-                styles.joinActionBtn,
-                isMember && styles.joinActionBtnMember,
-                hasPending && styles.joinActionBtnPending
-              ]}
-              onPress={() => {
-                if (isMember) {
-                  handleLeaveAssociation(item);
-                } else if (hasPending) {
-                  handleCancelRequest(item.id);
-                } else {
-                  handleJoinPress(item);
-                }
-              }}
-              disabled={isLoader}
-            >
-              {isLoader ? (
-                <ActivityIndicator size="small" color={isMember ? AppColors.primary : 'white'} />
-              ) : (
-                <>
-                  <Ionicons
-                    name={isMember ? 'checkmark-circle' : hasPending ? 'hourglass-outline' : 'add-circle-outline'}
-                    size={14}
-                    color={isMember ? AppColors.primary : hasPending ? '#D97706' : 'white'}
-                  />
-                  <Text
-                    style={[
-                      styles.joinActionBtnText,
-                      isMember && styles.joinActionBtnTextMember,
-                      hasPending && styles.joinActionBtnTextPending
-                    ]}
-                  >
-                    {isMember ? 'Member' : hasPending ? 'Pending' : 'Join'}
-                  </Text>
-                </>
-              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -696,85 +821,91 @@ export const AssociationScreen = () => {
 
   const renderHeader = () => (
     <>
-      {/* ─── Tabs Filter Switch ─── */}
-      <View style={[styles.toggleTabBar, { borderBottomWidth: 0, paddingHorizontal: 0 }]}>
+      {/* ─── Tabs Filter Switch (Matching EventsScreen List/Calendar Toggle) ─── */}
+      <View style={styles.toggleRow}>
         <TouchableOpacity
-          style={[styles.toggleTab, tabFilter === 'all' && styles.toggleTabActive]}
+          style={[styles.toggleBtn, tabFilter === 'all' && styles.toggleBtnActive]}
           onPress={() => { setTabFilter('all'); setIsLoading(true); }}
         >
-          <Ionicons name="earth" size={14} color={tabFilter === 'all' ? AppColors.primary : AppColors.textMedium} />
-          <Text style={[styles.toggleTabText, tabFilter === 'all' && styles.toggleTabTextActive]}>Discover</Text>
+          <Ionicons
+            name="earth"
+            size={15}
+            color={tabFilter === 'all' ? AppColors.primary : AppColors.textMedium}
+          />
+          <Text style={[styles.toggleText, tabFilter === 'all' && styles.toggleTextActive]}>Discover</Text>
         </TouchableOpacity>
+
         <TouchableOpacity
-          style={[styles.toggleTab, tabFilter === 'mine' && styles.toggleTabActive]}
+          style={[styles.toggleBtn, tabFilter === 'mine' && styles.toggleBtnActive]}
           onPress={() => { setTabFilter('mine'); setIsLoading(true); }}
         >
-          <Ionicons name="heart" size={14} color={tabFilter === 'mine' ? AppColors.primary : AppColors.textMedium} />
-          <Text style={[styles.toggleTabText, tabFilter === 'mine' && styles.toggleTabTextActive]}>My Associations</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ─── Search & Category Row ─── */}
-      <View style={[styles.searchSection, { borderBottomWidth: 0, paddingBottom: 0 }]}>
-        <View style={styles.searchBarWrap}>
-          <Ionicons name="search" size={18} color={AppColors.textMedium} style={styles.searchBarIcon} />
-          <TextInput
-            style={styles.searchBarInput}
-            placeholder="Search associations..."
-            placeholderTextColor={AppColors.textMedium}
-            value={searchQuery}
-            onChangeText={handleSearch}
-            returnKeyType="search"
+          <Ionicons
+            name="heart"
+            size={15}
+            color={tabFilter === 'mine' ? AppColors.primary : AppColors.textMedium}
           />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => { setSearchQuery(''); loadAssociations({ reset: true, search: '' }); }}>
-              <Ionicons name="close-circle" size={18} color={AppColors.textMedium} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {tabFilter === 'all' && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.categoryChipsScroll}
-            contentContainerStyle={styles.categoryChipsContent}
-          >
-            {CATEGORIES.map(cat => {
-              const isActive = selectedCategory === cat;
-              return (
-                <TouchableOpacity
-                  key={cat}
-                  style={[styles.categoryChip, isActive && styles.categoryChipActive]}
-                  onPress={() => handleCategoryChange(cat)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>
-                    {cat}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        )}
+          <Text style={[styles.toggleText, tabFilter === 'mine' && styles.toggleTextActive]}>My Associations</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* ── Top Create Association Bar ── */}
-      <View style={styles.createAssocBarCard}>
-        <TouchableOpacity
-          style={styles.createAssocBarContent}
-          onPress={() => navigation.navigate('CreateAssociation')}
-          activeOpacity={0.85}
-        >
-          <View style={styles.createAssocBarIconHolder}>
-            <Ionicons name="business" size={18} color={AppColors.primary} />
+      {/* Search & Create Association Card Block */}
+      <View style={{ paddingHorizontal: 16, marginVertical: 8 }}>
+        <View style={styles.searchCardContainer}>
+          {/* Top business icon */}
+          <View style={styles.searchCardIconContainer}>
+            <Ionicons name="business" size={24} color={AppColors.primary} />
           </View>
-          <Text style={styles.createAssocBarInputPlaceholder}>Create or register a new eco association…</Text>
-          <View style={styles.createAssocBarBtn}>
-            <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-            <Text style={styles.createAssocBarBtnText}>Create Association</Text>
+
+          {/* Search TextInput bar */}
+          <View style={styles.searchCardBar}>
+            <Ionicons name="search" size={18} color={AppColors.textMedium} />
+            <TextInput
+              style={styles.searchCardInput}
+              placeholder="Search associations..."
+              placeholderTextColor={AppColors.textMedium}
+              value={searchQuery}
+              onChangeText={handleSearch}
+            />
+            {isLoading && (
+              <ActivityIndicator size="small" color={AppColors.primary} style={{ marginRight: 6 }} />
+            )}
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => { setSearchQuery(''); loadAssociations({ reset: true, search: '' }); }} style={{ padding: 4 }}>
+                <Ionicons name="close-circle" size={16} color={AppColors.textMedium} />
+              </TouchableOpacity>
+            )}
           </View>
-        </TouchableOpacity>
+
+          {/* Create Association Button styled like Create Group/Feed Bar */}
+          <TouchableOpacity
+            style={styles.createBarContent}
+            onPress={() => navigation.navigate('CreateAssociation')}
+            activeOpacity={0.85}
+          >
+            {currentUser?.profileImage || currentUser?.profile_image ? (
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  overflow: 'hidden',
+                }}
+              >
+                <Image source={{ uri: resolveUrl(currentUser.profileImage || currentUser.profile_image) }} style={styles.createBarAvatar} />
+              </View>
+            ) : (
+              <View style={styles.createBarAvatarPlaceholder}>
+                <Text style={styles.createBarAvatarText}>
+                  {currentUser?.fullName || currentUser?.full_name ? (currentUser.fullName || currentUser.full_name!).substring(0, 2).toUpperCase() : 'EC'}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.createBarInputPlaceholder}>Create or register a new eco association…</Text>
+            <View style={styles.createBarBtn}>
+              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
+            </View>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Pending invitations top banner */}
@@ -826,8 +957,8 @@ export const AssociationScreen = () => {
         <View style={styles.transfersSection}>
           <Text style={styles.transfersSectionTitle}>Pending Administrative Transfers</Text>
           {pendingTransfers.map((demand) => {
-            const isReceived = String(demand.receiver?.id) === String(currentUser?.id) || 
-                               (demand.email && currentUser?.email && demand.email.toLowerCase() === currentUser.email.toLowerCase());
+            const isReceived = String(demand.receiver?.id) === String(currentUser?.id) ||
+              (demand.email && currentUser?.email && demand.email.toLowerCase() === currentUser.email.toLowerCase());
             const isLoader = actionLoadingId === demand.id;
 
             return (
@@ -837,11 +968,11 @@ export const AssociationScreen = () => {
                   <Text style={styles.transferAssocName} numberOfLines={1}>
                     {demand.association.name}
                   </Text>
-                  <View style={[styles.transferStatusTag, 
-                    demand.status === 'accepted_pending_validation' ? styles.statusAcceptedBg : styles.statusPendingBg
+                  <View style={[styles.transferStatusTag,
+                  demand.status === 'accepted_pending_validation' ? styles.statusAcceptedBg : styles.statusPendingBg
                   ]}>
                     <Text style={[styles.transferStatusText,
-                      demand.status === 'accepted_pending_validation' ? styles.statusAcceptedText : styles.statusPendingText
+                    demand.status === 'accepted_pending_validation' ? styles.statusAcceptedText : styles.statusPendingText
                     ]}>
                       {demand.status === 'accepted_pending_validation' ? 'Accepted' : 'Pending'}
                     </Text>
@@ -868,7 +999,7 @@ export const AssociationScreen = () => {
                     demand.status === 'accepted_pending_validation' ? (
                       <>
                         <Text style={styles.waitingText}>Waiting for sender validation</Text>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           style={styles.cancelLinkBtn}
                           onPress={() => handleCancelTransfer(demand.id)}
                           disabled={isLoader}
@@ -878,14 +1009,14 @@ export const AssociationScreen = () => {
                       </>
                     ) : (
                       <>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           style={styles.acceptBtn}
                           onPress={() => handleAcceptTransfer(demand.id)}
                           disabled={isLoader}
                         >
                           {isLoader ? <ActivityIndicator size="small" color="white" /> : <Text style={styles.actionBtnText}>Accept</Text>}
                         </TouchableOpacity>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           style={styles.refuseBtn}
                           onPress={() => handleRefuseTransfer(demand.id)}
                           disabled={isLoader}
@@ -897,7 +1028,7 @@ export const AssociationScreen = () => {
                   ) : (
                     <>
                       {demand.status === 'accepted_pending_validation' && (
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           style={styles.validateBtn}
                           onPress={() => handleValidateTransfer(demand.id)}
                           disabled={isLoader}
@@ -910,7 +1041,7 @@ export const AssociationScreen = () => {
                           )}
                         </TouchableOpacity>
                       )}
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={styles.cancelBtn}
                         onPress={() => handleCancelTransfer(demand.id)}
                         disabled={isLoader}
@@ -960,12 +1091,24 @@ export const AssociationScreen = () => {
           },
         ]}
       >
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={AppColors.textDark} />
-        </TouchableOpacity>
-        <Text style={styles.appBarTitle}>Eco Associations</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Image
+            source={{
+              uri: resolveUrl(currentUser?.profileImage || currentUser?.avatarUrl || currentUser?.profile_image) || 'https://lh3.googleusercontent.com/aida-public/AB6AXuD902TkYI0b6_KRKtnLv9ekUyPn_e1-iyS3F9Mt8-jOxUbE_1FI8UooP95XuIbGDhFd1ELMSlDE4LDvXawkcdg80li_VvGAmUAAb22zzMsqO98JD_YzW5TxohR_wEZEphVly-CeasRgVMSsXhkjHccqEHuB9C3XhNA0C8_32DACGAIVUOl4vxTVhCoGxybxC9Zl-Wq93MJxUJRYk6jV_9VbWczwGRwpix7oGK86KoEx2-VlgW9qO4k2',
+            }}
+            style={{ width: 32, height: 32, borderRadius: 16 }}
+          />
+          <Text style={{ fontSize: 20, fontWeight: '700', color: '#006D40' }}>Ekenox</Text>
+        </View>
 
         <View style={styles.appBarActions}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => setCategoryDrawerVisible(true)}>
+            <Ionicons name="options-outline" size={22} color={AppColors.textDark} />
+            {selectedCategories.length > 0 && (
+              <View style={styles.filterDotBadge} />
+            )}
+          </TouchableOpacity>
+
           {/* Favorites Star Icon Button */}
           <TouchableOpacity
             style={styles.iconBadgeBtn}
@@ -1009,44 +1152,10 @@ export const AssociationScreen = () => {
         </View>
       </Animated.View>
 
-      {/* Sticky Create Association Bar Overlay */}
-      {!isLoading && (
-        <Animated.View
-          style={[
-            styles.createAssocBarCard,
-            {
-              position: 'absolute',
-              top: 60 + insets.top,
-              left: 0,
-              right: 0,
-              zIndex: 99,
-              marginVertical: 0,
-              paddingVertical: 8,
-              backgroundColor: '#F5F5F7',
-              opacity: absoluteBarOpacity,
-              transform: [{ translateY: createBarTranslateY }],
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={styles.createAssocBarContent}
-            onPress={() => navigation.navigate('CreateAssociation')}
-            activeOpacity={0.85}
-          >
-            <View style={styles.createAssocBarIconHolder}>
-              <Ionicons name="business" size={18} color={AppColors.primary} />
-            </View>
-            <Text style={styles.createAssocBarInputPlaceholder}>Create or register a new eco association…</Text>
-            <View style={styles.createAssocBarBtn}>
-              <Ionicons name="add" size={14} color="white" style={{ marginRight: 2 }} />
-              <Text style={styles.createAssocBarBtnText}>Create Association</Text>
-            </View>
-          </TouchableOpacity>
-        </Animated.View>
-      )}
+
 
       {/* ─── Associations List ─── */}
-      {isLoading && associations.length === 0 ? (
+      {isLoading && associations.length === 0 && !searchQuery ? (
         <View style={[styles.loaderContainer, { paddingTop: 60 + insets.top }]}>
           <ActivityIndicator size="large" color={AppColors.primary} />
           <Text style={styles.loaderText}>Loading eco associations...</Text>
@@ -1082,59 +1191,115 @@ export const AssociationScreen = () => {
 
 
 
-      {/* ─────────────────────────────────────────────────────────────────────────────
-          MODAL 1: MY SENT REQUESTS BOTTOM SHEET
-          ───────────────────────────────────────────────────────────────────────────── */}
-      <Modal visible={myRequestsModalVisible} animationType="slide" transparent onRequestClose={() => setMyRequestsModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>My Sent Join Requests</Text>
-              <TouchableOpacity onPress={() => setMyRequestsModalVisible(false)}>
+      {/* ── Left Category Drawer Menu ── */}
+      <Modal visible={categoryDrawerVisible} animationType="slide" transparent onRequestClose={() => setCategoryDrawerVisible(false)}>
+        <View style={styles.drawerOverlay}>
+          <SafeAreaView style={styles.drawerContainer}>
+            <View style={styles.drawerHeader}>
+              <Text style={styles.drawerTitle}>Categories Filter</Text>
+              <TouchableOpacity onPress={() => setCategoryDrawerVisible(false)}>
                 <Ionicons name="close" size={24} color={AppColors.textDark} />
               </TouchableOpacity>
             </View>
 
-            {myJoinRequests.length === 0 ? (
-              <View style={styles.modalEmptyState}>
-                <Ionicons name="hourglass-outline" size={48} color={AppColors.textLight} />
-                <Text style={styles.modalEmptyTitle}>No Pending Requests</Text>
-                <Text style={styles.modalEmptyText}>You don't have any sent join requests currently waiting for approval.</Text>
-              </View>
-            ) : (
-              <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
-                {myJoinRequests.map((req, idx) => (
-                  <View key={req.id ? String(req.id) : `myreq-${idx}`} style={styles.requestCard}>
-                    <View style={styles.requestCardHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.requestAssocName}>{req.association?.name || 'Eco Association'}</Text>
-                        <Text style={styles.requestDate}>Requested on: {formatDate(req.created_at)}</Text>
-                      </View>
-                      <View style={styles.pendingIndicatorTag}>
-                        <Text style={styles.pendingIndicatorTagText}>Pending</Text>
-                      </View>
-                    </View>
+            <ScrollView style={{ flex: 1, paddingHorizontal: 16 }}>
+              {categories.map(cat => {
+                const isSelected = selectedCategories.includes(cat.id);
+                return (
+                  <TouchableOpacity
+                    key={cat.id}
+                    style={styles.categoryItemRow}
+                    onPress={() => toggleCategorySelection(cat.id)}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'checkbox' : 'square-outline'}
+                      size={22}
+                      color={isSelected ? AppColors.primary : AppColors.textMedium}
+                    />
+                    <Text style={[styles.categoryItemText, isSelected && styles.categoryItemTextActive]}>{cat.displayName || cat.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
-                    {req.message ? (
-                      <View style={styles.requestMessageContainer}>
-                        <Text style={styles.requestMessageLabel}>My message:</Text>
-                        <Text style={styles.requestMessageText}>"{req.message}"</Text>
-                      </View>
-                    ) : null}
-
-                    <TouchableOpacity
-                      style={styles.cancelRequestActionBtn}
-                      onPress={() => handleCancelRequest(req.association?.id || '')}
-                    >
-                      <Ionicons name="trash-outline" size={14} color={AppColors.error} />
-                      <Text style={styles.cancelRequestActionBtnText}>Cancel Join Request</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-          </View>
+            <View style={styles.drawerFooter}>
+              <TouchableOpacity style={styles.drawerResetBtn} onPress={clearCategoryFilters}>
+                <Text style={styles.drawerResetText}>Clear All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.drawerApplyBtn} onPress={() => setCategoryDrawerVisible(false)}>
+                <Text style={styles.drawerApplyText}>Apply Filters ({selectedCategories.length})</Text>
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
         </View>
+      </Modal>
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          FULL PAGE: MY SENT JOIN REQUESTS SCREEN
+          ───────────────────────────────────────────────────────────────────────────── */}
+      <Modal visible={myRequestsModalVisible} animationType="slide" onRequestClose={() => setMyRequestsModalVisible(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
+          {/* Full Page Header */}
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            backgroundColor: 'white',
+            borderBottomWidth: 1,
+            borderBottomColor: '#E5E7EB',
+          }}>
+            <TouchableOpacity onPress={() => setMyRequestsModalVisible(false)} style={{ padding: 4, marginRight: 12 }}>
+              <Ionicons name="arrow-back" size={24} color={AppColors.textDark} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: AppColors.textDark }}>My Sent Join Requests</Text>
+              <Text style={{ fontSize: 12, color: AppColors.textMedium, marginTop: 2 }}>
+                {myJoinRequests.length} pending request{myJoinRequests.length !== 1 ? 's' : ''} waiting for approval
+              </Text>
+            </View>
+          </View>
+
+          {/* Full Page Content Body */}
+          {myJoinRequests.length === 0 ? (
+            <View style={styles.modalEmptyState}>
+              <Ionicons name="hourglass-outline" size={56} color={AppColors.textLight} />
+              <Text style={styles.modalEmptyTitle}>No Pending Requests</Text>
+              <Text style={styles.modalEmptyText}>You don't have any sent join requests currently waiting for approval.</Text>
+            </View>
+          ) : (
+            <ScrollView style={{ flex: 1, padding: 16 }} showsVerticalScrollIndicator={false}>
+              {myJoinRequests.map((req, idx) => (
+                <View key={req.id ? String(req.id) : `myreq-${idx}`} style={styles.requestCard}>
+                  <View style={styles.requestCardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.requestAssocName}>{req.association?.name || 'Eco Association'}</Text>
+                      <Text style={styles.requestDate}>Requested on: {formatDate(req.created_at)}</Text>
+                    </View>
+                    <View style={styles.pendingIndicatorTag}>
+                      <Text style={styles.pendingIndicatorTagText}>Pending Approval</Text>
+                    </View>
+                  </View>
+
+                  {req.message ? (
+                    <View style={styles.requestMessageContainer}>
+                      <Text style={styles.requestMessageLabel}>My Note / Motif:</Text>
+                      <Text style={styles.requestMessageText}>"{req.message}"</Text>
+                    </View>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={styles.cancelRequestActionBtn}
+                    onPress={() => handleCancelRequest(req.association?.id || '')}
+                  >
+                    <Ionicons name="trash-outline" size={15} color={AppColors.error} />
+                    <Text style={styles.cancelRequestActionBtnText}>Cancel Join Request</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </SafeAreaView>
       </Modal>
 
       {/* ─────────────────────────────────────────────────────────────────────────────
@@ -1470,7 +1635,7 @@ export const AssociationScreen = () => {
                         <View style={{ flex: 1 }}>
                           <Text style={styles.adminAssocName} numberOfLines={1}>{assoc.name}</Text>
                           <Text style={styles.adminRoleRow} numberOfLines={1}>
-                            {assoc.category} • {assoc.member_count} members
+                            {((assoc.category as any)?.displayName || (assoc.category as any)?.name || assoc.category || 'Eco')} • {assoc.member_count} members
                           </Text>
                         </View>
                         <Ionicons name="chevron-forward" size={16} color={AppColors.textLight} />
@@ -1503,11 +1668,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#EBEBEB',
   },
-  backBtn: { padding: 6 },
+  backBtn: { padding: 6, position: 'relative' },
   appBarTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '800',
-    color: AppColors.textDark,
+    color: AppColors.primary,
   },
   appBarActions: {
     flexDirection: 'row',
@@ -1621,6 +1786,142 @@ const styles = StyleSheet.create({
   },
   categoryChipTextActive: {
     color: 'white',
+  },
+  filterMenuBtn: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    height: 46,
+    width: 46,
+  },
+  filterDotBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
+  drawerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  drawerContainer: {
+    width: SCREEN_W * 0.80,
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderBottomLeftRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: -4, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F0F0F2',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 12,
+    padding: 3,
+  },
+  toggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+    paddingVertical: 8,
+    gap: 5,
+  },
+  toggleBtnActive: {
+    backgroundColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  toggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: AppColors.textMedium,
+  },
+  toggleTextActive: {
+    color: AppColors.textDark,
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  drawerTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: AppColors.textDark,
+  },
+  categoryItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  categoryItemText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: AppColors.textMedium,
+    marginLeft: 12,
+  },
+  categoryItemTextActive: {
+    color: AppColors.primary,
+    fontWeight: '700',
+  },
+  drawerFooter: {
+    flexDirection: 'row',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#EBEBEB',
+    gap: 12,
+  },
+  drawerResetBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+  },
+  drawerResetText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: AppColors.textMedium,
+  },
+  drawerApplyBtn: {
+    flex: 2,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: AppColors.primary,
+  },
+  drawerApplyText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // ── Loader ──
@@ -1741,17 +2042,18 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: 'white',
     borderRadius: 16,
+    marginBottom: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#EBEBEB',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
     elevation: 3,
   },
   cardImageWrap: {
-    height: 140,
+    height: 160,
     width: '100%',
     position: 'relative',
   },
@@ -1764,119 +2066,102 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardCategoryBadge: {
+  verifiedBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3B82F6', // Blue for verified
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  verifiedText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  privateBadge: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 3,
+  },
+  privateText: {
+    color: 'white',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  floatingStarBtn: {
     position: 'absolute',
     top: 12,
     right: 12,
-    backgroundColor: 'white',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  cardCategoryBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: AppColors.primary,
-    textTransform: 'uppercase',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   cardContent: {
     padding: 16,
   },
-  cardMainRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  cardLogo: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-  },
-  cardLogoPlaceholder: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: AppColors.primary + '15',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: AppColors.primary + '25',
-  },
-  cardTitleBlock: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-  },
-  privateAssoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEE2E2',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 1.5,
-    marginLeft: 6,
-  },
-  privateAssoBadgeText: {
-    color: '#EF4444',
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  cardName: {
+  cardTitle: {
     fontSize: 16,
     fontWeight: '800',
     color: AppColors.textDark,
-    flexShrink: 1,
+    marginBottom: 4,
+    lineHeight: 22,
   },
-  cardTagline: {
+  cardOrganizer: {
     fontSize: 12,
-    color: AppColors.textMedium,
-    marginTop: 2,
-    fontStyle: 'italic',
+    color: AppColors.primary,
+    fontWeight: '600',
   },
-  metaInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  membersIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  membersIndicatorText: {
-    fontSize: 12,
-    color: AppColors.textMedium,
-    fontWeight: '500',
-  },
-  roleLabelPill: {
-    backgroundColor: '#D1FAE5',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  roleLabelPillText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-    textTransform: 'capitalize',
-  },
-  cardDesc: {
+  cardDescription: {
     fontSize: 13,
     color: AppColors.textMedium,
-    lineHeight: 18,
-    marginBottom: 12,
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  cardInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  cardInfoText: {
+    fontSize: 12,
+    color: AppColors.textMedium,
+    flex: 1,
+  },
+  cardCatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  catChip: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  catChipText: {
+    fontSize: 10,
+    color: AppColors.textMedium,
+    fontWeight: '600',
   },
   inlineInviteAlert: {
     flexDirection: 'row',
@@ -1896,74 +2181,142 @@ const styles = StyleSheet.create({
   cardDivider: {
     height: 1,
     backgroundColor: '#F3F4F6',
-    marginVertical: 4,
-    marginBottom: 12,
+    marginVertical: 12,
   },
-  actionButtonsRow: {
+  cardFooter: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  detailsActionBtn: {
-    flex: 1.2,
+  regBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: AppColors.primary + '40',
-    gap: 4,
-  },
-  detailsActionBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: AppColors.primary,
-  },
-  chatActionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: AppColors.primaryLight,
-    gap: 5,
-  },
-  chatActionBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: 'white',
-  },
-  joinActionBtn: {
-    flex: 1.2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 36,
-    borderRadius: 10,
     backgroundColor: AppColors.primary,
-    gap: 5,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    gap: 6,
+    minWidth: 100,
   },
-  joinActionBtnMember: {
-    backgroundColor: 'white',
-    borderWidth: 1.5,
+  regBtnActive: {
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  joinActionBtnPending: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1.5,
-    borderColor: '#D97706',
+  regBtnPending: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
   },
-  joinActionBtnText: {
+  regBtnText: {
+    color: 'white',
     fontSize: 12,
     fontWeight: '700',
-    color: 'white',
   },
-  joinActionBtnTextMember: {
+  regBtnTextActive: {
     color: AppColors.primary,
   },
-  joinActionBtnTextPending: {
+  regBtnTextPending: {
     color: '#D97706',
+  },
+  detailBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+  },
+  detailBtnText: {
+    fontSize: 12,
+    color: AppColors.primary,
+    fontWeight: '700',
+  },
+  searchCardContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bccabd', // outline variant
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  searchCardIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#d9e6da', // secondary container
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  searchCardBar: {
+    flexDirection: 'row',
+    backgroundColor: '#f3f3f6',
+    borderRadius: 8,
+    height: 44,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  searchCardInput: {
+    flex: 1,
+    color: '#1a1c1e',
+    fontSize: 14,
+    marginLeft: 8,
+    height: '100%',
+    padding: 0,
+  },
+  createBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  createBarAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E5E7EB',
+  },
+  createBarAvatarPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E5E7EB',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  createBarAvatarText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: AppColors.textMedium,
+  },
+  createBarInputPlaceholder: {
+    flex: 1,
+    fontSize: 13,
+    color: AppColors.textMedium,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  createBarBtn: {
+    backgroundColor: AppColors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 
   // ── Empty State ──

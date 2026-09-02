@@ -9,16 +9,18 @@ import { FeedScreen } from '../screens/FeedScreen';
 import { EventsScreen } from '../screens/EventsScreen';
 import { AssociationScreen } from '../screens/AssociationScreen';
 import { EcoMarketScreen } from '../screens/EcoMarketScreen';
-import { EcoChallengeScreen } from '../screens/EcoChallengeScreen';
+//import { EcoChallengeScreen } from '../screens/EcoChallengeScreen';
 
-type TabKey = 0 | 1 | 2 | 3 | 4;
+//type TabKey = 0 | 1 | 2 | 3 | 4;
+type TabKey = 0 | 1 | 2 | 3;
+
 
 const TAB_CONFIG: Array<{ label: string; icon: string }> = [
   { label: 'Home', icon: 'home' },
   { label: 'Events', icon: 'calendar' },
   { label: 'Association', icon: 'people' },
   { label: 'Eco Market', icon: 'cart' },
-  { label: 'Challenge', icon: 'trophy' },
+  //{ label: 'Challenge', icon: 'trophy' },
 ];
 
 export const MainTabNavigator = () => {
@@ -31,7 +33,7 @@ export const MainTabNavigator = () => {
       case 1: return <EventsScreen />;
       case 2: return <AssociationScreen />;
       case 3: return <EcoMarketScreen />;
-      case 4: return <EcoChallengeScreen />;
+      // case 4: return <EcoChallengeScreen />;
       default: return <FeedScreen />;
     }
   };

@@ -129,14 +129,15 @@ class AuthService {
     }
   }
 
-  // Register user with email and password
-  public async signUpWithEmail(email: string, password: string, name?: string): Promise<AuthResult> {
+  // Register user with email, password, name, and phone
+  public async signUpWithEmail(email: string, password: string, name?: string, phone?: string): Promise<AuthResult> {
     try {
-      console.log('🔄 Requesting Signup...');
+      console.log('🔄 Requesting Signup with phone...');
       const response = await axios.post(`${this.baseUrl}${ApiConfig.authRegister}`, {
         email,
         password,
         full_name: name,
+        phone,
       }, {
         headers: { 'Content-Type': 'application/json' },
         timeout: 10000,
@@ -555,6 +556,38 @@ class AuthService {
       }
     } catch (error: any) {
       console.error('❌ Upload profile image error:', error);
+      const message = error.response?.data?.message || error.message || 'Network error';
+      return {
+        success: false,
+        message,
+      };
+    }
+  }
+
+  // Get other user by ID
+  public async getUserById(id: number): Promise<any> {
+    try {
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/users/${id}`, {
+        headers,
+        timeout: 10000,
+      });
+
+      const data = response.data;
+      if (response.status === 200 && data.data) {
+        return {
+          success: true,
+          user: data.data,
+          message: data.message || 'Profile retrieved successfully',
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || 'Failed to retrieve user profile',
+        };
+      }
+    } catch (error: any) {
+      console.error(`❌ Get user by ID ${id} error:`, error);
       const message = error.response?.data?.message || error.message || 'Network error';
       return {
         success: false,

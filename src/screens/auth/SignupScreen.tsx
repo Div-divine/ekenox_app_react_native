@@ -7,11 +7,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { AppColors } from '../../theme/colors';
@@ -26,6 +26,7 @@ export const SignupScreen = ({ navigation }: SignupScreenProps) => {
   const { googleSignIn, facebookSignIn, isLoading: isSocialLoading } = useSocialAuth();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   
@@ -57,7 +58,7 @@ export const SignupScreen = ({ navigation }: SignupScreenProps) => {
 
     setIsLoading(true);
     try {
-      const result = await signup(email.trim(), password, fullName.trim());
+      const result = await signup(email.trim(), password, fullName.trim(), phone.trim() || undefined);
       if (!result.success) {
         Alert.alert('Registration Failed', result.message);
       } else {
@@ -139,6 +140,18 @@ export const SignupScreen = ({ navigation }: SignupScreenProps) => {
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={styles.label}>Phone Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="+33 6 12 34 56 78"
+                placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
                 autoCapitalize="none"
                 autoCorrect={false}
               />

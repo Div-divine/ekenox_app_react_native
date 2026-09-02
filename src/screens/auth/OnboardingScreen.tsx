@@ -5,11 +5,11 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   Dimensions,
   FlatList,
   StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { AppColors } from '../../theme/colors';

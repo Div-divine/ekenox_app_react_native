@@ -51,6 +51,28 @@ export interface Feed {
   created_at: string;
   updated_at?: string;
   group_id?: string | number | null;
+  event_id?: string | number | null;
+  event?: {
+    id: string | number;
+    title: string;
+    banner_image?: string;
+    start_time?: string;
+    location?: string;
+  } | null;
+  feed_group?: {
+    id: string | number;
+    name: string;
+    profile_image_url?: string;
+    privacy_level?: string;
+    is_private?: boolean;
+  } | null;
+  challenge_id?: string | number | null;
+  challenge?: {
+    id: string | number;
+    title: string;
+    level?: number;
+    category?: any;
+  } | null;
   user: {
     id: string | number;
     full_name: string;
@@ -107,6 +129,10 @@ export interface FeedComment {
   likes_count?: number;
   user_liked?: boolean;
   replies_count?: number;
+  reactions_count?: number;
+  user_reacted?: boolean;
+  user_reaction_types?: string[];
+  reaction_type?: string | null;
 }
 
 export interface FeedCommentReply {
@@ -127,6 +153,11 @@ export interface FeedCommentReply {
   };
   nested_replies?: FeedCommentReply[];
   reactions_count?: number;
+  user_liked?: boolean;
+  user_reacted?: boolean;
+  user_reaction_types?: string[];
+  reaction_type?: string | null;
+  parent_reply?: FeedCommentReply | null;
 }
 
 export interface AppNotification {
@@ -303,10 +334,34 @@ class FeedService {
     };
   }
 
-  // Get live feed list (optionally filtered by groupId)
-  public async getFeeds(page: number = 1, limit: number = 10, groupId?: string | number): Promise<Feed[]> {
+  /**
+   * GET with a couple of automatic retries on transient network errors.
+   * Falls back to a shorter timeout on the first attempt so slow/unreachable
+   * servers surface quickly instead of hanging.
+   */
+  private async getWithRetry<T = any>(url: string, config: any = {}, attempts = 2): Promise<{ status: number; data: T }> {
+    const timeout = config.timeout || 10000;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const response = await axios.get(url, { ...config, timeout: timeout * attempt });
+        return { status: response.status, data: response.data };
+      } catch (error: any) {
+        const isNetworkError = !error?.response && (error?.message === 'Network Error' || error?.code === 'ECONNABORTED' || String(error?.message || '').includes('Network Error'));
+        if (isNetworkError && attempt < attempts) {
+          console.warn(`🌐 Transient network error on GET ${url}, retry ${attempt}/${attempts - 1}`);
+          await new Promise(res => setTimeout(res, 600 * attempt));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('GET failed after retries');
+  }
+
+  // Get live feed list (optionally filtered by groupId or userId)
+  public async getFeeds(page: number = 1, limit: number = 10, groupId?: string | number, userId?: string | number): Promise<Feed[]> {
     try {
-      console.log(`🔄 Fetching feeds - page: ${page}, limit: ${limit}, groupId: ${groupId || 'none'}`);
+      console.log(`🔄 Fetching feeds - page: ${page}, limit: ${limit}, groupId: ${groupId || 'none'}, userId: ${userId || 'none'}`);
       const headers = await this.getHeaders();
 
       let url = `${this.baseUrl}/feeds`;
@@ -314,12 +369,13 @@ class FeedService {
         url = `${this.baseUrl}/feeds/groups/${groupId}/feeds`;
       }
 
-      const response = await axios.get(url, {
+      const response = await this.getWithRetry(url, {
         headers,
         params: {
           page,
           limit,
-          ...(groupId ? {} : { exclude_groups: false }) // Allow posts from groups if requested globally
+          ...(groupId ? {} : { exclude_groups: false }), // Allow posts from groups if requested globally
+          ...(userId ? { user_id: userId } : {})
         },
         timeout: 10000,
       });
@@ -332,6 +388,7 @@ class FeedService {
           likes_count: feed.stats?.reactions ?? feed.likes_count ?? 0,
           comments_count: feed.stats?.comments ?? feed.comments_count ?? 0,
           is_liked: feed.user_reacted ?? feed.is_liked ?? false,
+          is_following: feed.user?.is_following ?? feed.is_following ?? false,
           has_media: (feed.media && feed.media.length > 0) ?? feed.has_media ?? false,
           author: feed.user ? {
             id: feed.user.id,
@@ -678,12 +735,14 @@ class FeedService {
   }
 
   // Get live stories list
-  public async getStoryList(page: number = 1, limit: number = 10): Promise<any[]> {
+  public async getStoryList(page: number = 1, limit: number = 10, userId?: string | number): Promise<any[]> {
     try {
       const headers = await this.getHeaders();
-      const response = await axios.get(`${this.baseUrl}/stories`, {
+      const params: any = { page, limit };
+      if (userId) params.user_id = userId;
+      const response = await this.getWithRetry(`${this.baseUrl}/stories`, {
         headers,
-        params: { page, limit },
+        params,
         timeout: 10000
       });
       if (response.status === 200 && response.data?.success) {
@@ -702,7 +761,7 @@ class FeedService {
     try {
       const headers = await this.getHeaders();
       await axios.post(`${this.baseUrl}/stories/${storyId}/view`, {}, { headers, timeout: 8000 });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   public async toggleStoryLike(storyId: string | number): Promise<{ liked: boolean; like_count: number }> {
@@ -1050,13 +1109,28 @@ class FeedService {
   public async getComments(feedId: string | number, page: number = 1, limit: number = 20): Promise<FeedComment[]> {
     try {
       const headers = await this.getHeaders();
-      const response = await axios.get(`${this.baseUrl}/feeds/${feedId}/comments`, {
+      const response = await this.getWithRetry(`${this.baseUrl}/feeds/${feedId}/comments`, {
         headers,
         params: { page, limit },
         timeout: 10000,
       });
       if (response.status === 200 && response.data?.success) {
-        return response.data.data?.comments || [];
+        const comments: any[] = response.data.data?.comments || [];
+        return comments.map((c: any) => {
+          const mapped = this.normalizeReactionFields(c);
+          const inlineReplies = c.nestedReplies ?? c.replies ?? c.replies_array ?? c.nested_replies ?? [];
+          mapped.nested_replies = (Array.isArray(inlineReplies) ? inlineReplies : []).map(r => this.normalizeReplyTree(r));
+          const inlineCount = Array.isArray(inlineReplies) ? inlineReplies.length : 0;
+          mapped.replies_count =
+            c.repliesCount ??
+            c.replies_count ??
+            c.nestedRepliesCount ??
+            c.nested_replies_count ??
+            c.reply_count ??
+            inlineCount ??
+            0;
+          return mapped;
+        });
       }
       return [];
     } catch (error: any) {
@@ -1065,12 +1139,102 @@ class FeedService {
     }
   }
 
+  private normalizeReactionFields<T extends { [k: string]: any }>(item: T): T;
+  private normalizeReactionFields(item: any): any {
+    if (!item) return item;
+    const reacted =
+      item.user_reacted ??
+      item.user_liked ??
+      item.userReacted ??
+      item.userLiked ??
+      item.is_liked ??
+      item.isLiked ??
+      item.reacted ??
+      item.liked_by_me ??
+      item.likedByMe ??
+      false;
+
+    // CamelCase AND snake_case reaction names are both used by the API.
+    const rawTypes = item.user_reaction_types ?? item.userReactionTypes ?? item.user_reactions ?? item.userReactions ?? [];
+    const types = (Array.isArray(rawTypes) ? rawTypes : [])
+      .map((t: any) => typeof t === 'string' ? t : t?.type ?? t?.reaction_type ?? t?.reaction)
+      .filter(Boolean);
+
+    // reactionsBreakdown: { breakdown: [{type/reaction_type, count, reacted_by_user?}], total }
+    const breakdown = item.reactionsBreakdown ?? item.reactions_breakdown ?? null;
+    const breakdownArr = Array.isArray(breakdown)
+      ? breakdown
+      : Array.isArray(breakdown?.breakdown)
+        ? breakdown.breakdown
+        : null;
+
+    let total =
+      item.reactionsCount ??
+      item.reactions_count ??
+      item.reactionCount ??
+      item.reaction_count ??
+      item.likes_count ??
+      item.likesCount ??
+      0;
+    if (!total && breakdownArr) {
+      const fromBreakdown = Number(breakdown?.total ?? breakdown?.total_count ?? 0);
+      if (fromBreakdown) total = fromBreakdown;
+    }
+
+    let anyUserReactedViaBreakdown = false;
+    if (breakdownArr) {
+      (breakdownArr as any[]).forEach((entry: any) => {
+        const type = entry?.type ?? entry?.reaction_type ?? entry?.reaction ?? entry?.key ?? null;
+        if (type && (
+          entry?.reacted_by_user === true ||
+          entry?.reactedByUser === true ||
+          entry?.user_reacted === true ||
+          entry?.reacted === true ||
+          entry?.is_reacted === true
+        )) {
+          if (!types.includes(String(type))) types.push(String(type));
+          anyUserReactedViaBreakdown = true;
+        }
+      });
+    }
+
+    const finalReacted = !!reacted || anyUserReactedViaBreakdown;
+    const cleanTotal = Number(total) || (
+      breakdownArr ? Number(breakdown?.total ?? 0) || 0 : 0
+    );
+
+    return {
+      ...item,
+      created_at: item.createdAt ?? item.created_at,
+      updated_at: item.updatedAt ?? item.updated_at,
+      user_reacted: finalReacted,
+      user_liked: finalReacted,
+      reactions_count: cleanTotal,
+      likes_count: cleanTotal,
+      user_reaction_types: types.length ? [...new Set(types)] : finalReacted ? ['like'] : [],
+      reaction_type: (types.length ? String(types[0]) : null) ?? item.reaction_type ?? item.reactionType ?? (finalReacted ? 'like' : null),
+    };
+  }
+
+  /** Recursively map a raw API reply (camelCase: nestedReplies, createdAt, reactionsCount) into the app's shape. */
+  private normalizeReplyTree(reply: any): any {
+    if (!reply) return reply;
+    const mapped = this.normalizeReactionFields(reply);
+    const parentPid = reply.parent_reply_id ?? reply.parentReplyId ?? reply.parent_reply?.id;
+    mapped.parent_reply_id = parentPid ?? null;
+    mapped.parentReplyId = parentPid ?? null;
+    const nested = reply.nestedReplies ?? reply.nested_replies ?? [];
+    mapped.nested_replies = (Array.isArray(nested) ? nested : []).map(r => this.normalizeReplyTree(r));
+    return mapped;
+  }
+
   public async addComment(feedId: string | number, content: string): Promise<{ success: boolean; comment?: FeedComment; message?: string }> {
     try {
       const headers = await this.getHeaders();
       const response = await axios.post(`${this.baseUrl}/feeds/${feedId}/comments`, { content }, { headers, timeout: 10000 });
       if (response.status === 201 && response.data?.success) {
-        return { success: true, comment: response.data.data?.comment };
+        const comment = this.normalizeReactionFields(response.data.data?.comment || response.data.data || null);
+        return { success: true, comment };
       }
       return { success: false, message: response.data?.message || 'Failed to add comment' };
     } catch (error: any) {
@@ -1120,9 +1284,10 @@ class FeedService {
   public async getCommentReplies(commentId: string | number): Promise<FeedCommentReply[]> {
     try {
       const headers = await this.getHeaders();
-      const response = await axios.get(`${this.baseUrl}/feeds/api/comments/${commentId}/replies`, { headers, timeout: 10000 });
+      const response = await this.getWithRetry(`${this.baseUrl}/feeds/api/comments/${commentId}/replies`, { headers, timeout: 10000 });
       if (response.data?.success) {
-        return response.data.data?.replies || [];
+        const replies: any[] = response.data.data?.replies || [];
+        return replies.map(r => this.normalizeReplyTree(r));
       }
       return [];
     } catch (error: any) {
@@ -1138,7 +1303,8 @@ class FeedService {
       if (parentReplyId) body.parentReplyId = parentReplyId;
       const response = await axios.post(`${this.baseUrl}/feeds/api/comments/${commentId}/replies`, body, { headers, timeout: 10000 });
       if (response.status === 200 || response.status === 201) {
-        return response.data || null;
+        const raw = response.data?.data?.reply ?? response.data?.data?.replies?.[0] ?? response.data?.data ?? response.data ?? null;
+        return this.normalizeReplyTree({ ...(typeof raw === 'object' ? raw : {}), content, comment_id: commentId });
       }
       return null;
     } catch (error: any) {
@@ -1169,6 +1335,230 @@ class FeedService {
     }
   }
 
+  // ── COMMENT / REPLY REACTIONS ─────────────────────────────────────────────
+
+  /**
+   * React to a comment with a reaction type (like, love, fire, ...).
+   * Toggling the same type removes the reaction.
+   */
+  public async toggleCommentReaction(
+    commentId: string | number,
+    reactionType: string = 'like'
+  ): Promise<{ success: boolean; isLiked?: boolean; reactionsCount?: number; reaction_type?: string }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.post(
+        `${this.baseUrl}/feeds/api/comments/${commentId}/react`,
+        { reaction_type: reactionType },
+        { headers, timeout: 10000 }
+      );
+      const data = res.data?.data || res.data || {};
+      const norm = this.normalizeReactionFields({ ...data, user_reaction_types: data.userReactionTypes ?? data.user_reaction_types ?? data.user_reactions });
+      return {
+        success: true,
+        isLiked: norm.user_reacted ?? data.isLiked ?? data.userLiked ?? data.userReacted ?? (typeof reactionType === 'string' ? data.reaction_type === reactionType || data.reactionType === reactionType : undefined),
+        reactionsCount: norm.reactions_count ?? norm.likes_count ?? 0,
+        reaction_type: norm.reaction_type || reactionType,
+      };
+    } catch (error: any) {
+      console.error('❌ Error toggling comment reaction:', error.response?.data || error.message);
+      return { success: false };
+    }
+  }
+
+  /**
+   * React to a reply with a reaction type. Toggling the same type removes it.
+   */
+  public async toggleReplyReaction(
+    replyId: string | number,
+    reactionType: string = 'like'
+  ): Promise<{ success: boolean; isLiked?: boolean; reactionsCount?: number; reaction_type?: string }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.post(
+        `${this.baseUrl}/feeds/api/replies/${replyId}/react`,
+        { reaction_type: reactionType },
+        { headers, timeout: 10000 }
+      );
+      const data = res.data?.data || res.data || {};
+      const norm = this.normalizeReactionFields({ ...data, user_reaction_types: data.userReactionTypes ?? data.user_reaction_types ?? data.user_reactions });
+      return {
+        success: true,
+        isLiked: norm.user_reacted ?? data.isLiked ?? data.userLiked ?? data.userReacted ?? (typeof reactionType === 'string' ? data.reaction_type === reactionType || data.reactionType === reactionType : undefined),
+        reactionsCount: norm.reactions_count ?? norm.likes_count ?? 0,
+        reaction_type: norm.reaction_type || reactionType,
+      };
+    } catch (error: any) {
+      console.error('❌ Error toggling reply reaction:', error.response?.data || error.message);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Build a nested reply tree from a (potentially flat) list of replies.
+   * Replies are grouped under their parent using `parent_reply_id` /
+   * `parent_reply.id` / `parentReplyId`, so nested conversations are visible.
+   */
+  public buildReplyTree<T extends { [k: string]: any }>(replies: T[], _parentId?: string | number): T[] {
+    if (!Array.isArray(replies)) return [];
+    const map = new Map<any, any>();
+    (replies || []).forEach(r => {
+      const existingNested = r.nested_replies ?? r.nestedReplies ?? [];
+      const normalizedNested = Array.isArray(existingNested)
+        ? existingNested.map(item => this.normalizeReplyTree(item))
+        : [];
+      map.set(String(r.id), { ...r, nested_replies: normalizedNested });
+    });
+
+    const roots: any[] = [];
+    map.forEach(r => {
+      const parentId =
+        r.parent_reply_id ??
+        r.parent_reply?.id ??
+        r.parentReplyId;
+      if (parentId != null && parentId !== '' && map.has(String(parentId))) {
+        const parent = map.get(String(parentId)) as any;
+        if (!parent.nested_replies.some((child: any) => String(child.id) === String(r.id))) {
+          parent.nested_replies.push(r);
+        }
+      } else {
+        roots.push(r);
+      }
+    });
+    return roots;
+  }
+
+  // ── EVENT COMMENTS ───────────────────────────────────────────────────────
+
+  /** GET /api/events/{eventId}/comments */
+  public async getEventComments(
+    eventId: string | number,
+    params?: { sort_by?: string; limit?: number; offset?: number; search?: string }
+  ): Promise<{ data: any[]; pagination: any }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.get(`${this.baseUrl}/events/${eventId}/comments`, { headers, params, timeout: 10000 });
+      return { data: res.data?.data || [], pagination: res.data?.pagination || {} };
+    } catch (e: any) {
+      console.error('❌ Error fetching event comments:', e.response?.data || e.message);
+      return { data: [], pagination: {} };
+    }
+  }
+
+  /** POST /api/events/{eventId}/comments */
+  public async createEventComment(
+    eventId: string | number,
+    content: string,
+    parentCommentId?: string | number
+  ): Promise<{ success: boolean; data?: any; message?: string }> {
+    try {
+      const headers = await this.getHeaders();
+      const body: any = { content };
+      if (parentCommentId) body.parent_comment_id = parentCommentId;
+      const res = await axios.post(`${this.baseUrl}/events/${eventId}/comments`, body, { headers, timeout: 10000 });
+      return { success: true, data: res.data?.data };
+    } catch (e: any) {
+      return { success: false, message: e.response?.data?.message || e.message };
+    }
+  }
+
+  /** PUT /api/events/{eventId}/comments/{commentId} */
+  public async updateEventComment(
+    eventId: string | number,
+    commentId: string | number,
+    content: string
+  ): Promise<{ success: boolean; data?: any; message?: string }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.put(`${this.baseUrl}/events/${eventId}/comments/${commentId}`, { content }, { headers, timeout: 10000 });
+      return { success: true, data: res.data?.data };
+    } catch (e: any) {
+      return { success: false, message: e.response?.data?.message || e.message };
+    }
+  }
+
+  /** DELETE /api/events/{eventId}/comments/{commentId} */
+  public async deleteEventComment(
+    eventId: string | number,
+    commentId: string | number
+  ): Promise<boolean> {
+    try {
+      const headers = await this.getHeaders();
+      await axios.delete(`${this.baseUrl}/events/${eventId}/comments/${commentId}`, { headers, timeout: 10000 });
+      return true;
+    } catch (e: any) {
+      console.error('❌ Error deleting event comment:', e.response?.data || e.message);
+      return false;
+    }
+  }
+
+  /** POST /api/events/{eventId}/comments/{commentId}/react */
+  public async reactToEventComment(
+    eventId: string | number,
+    commentId: string | number,
+    reactionType: string = 'like'
+  ): Promise<{ success: boolean; data?: any; message?: string }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.post(
+        `${this.baseUrl}/events/${eventId}/comments/${commentId}/react`,
+        { reaction_type: reactionType },
+        { headers, timeout: 10000 }
+      );
+      return { success: true, data: res.data?.data };
+    } catch (e: any) {
+      return { success: false, message: e.response?.data?.message || e.message };
+    }
+  }
+
+  /** GET /api/events/{eventId}/comments/{commentId}/replies */
+  public async getEventCommentReplies(
+    eventId: string | number,
+    commentId: string | number,
+    params?: { limit?: number; offset?: number }
+  ): Promise<{ data: any[]; pagination: any }> {
+    try {
+      const headers = await this.getHeaders();
+      const res = await axios.get(`${this.baseUrl}/events/${eventId}/comments/${commentId}/replies`, { headers, params, timeout: 10000 });
+      return { data: res.data?.data || [], pagination: res.data?.pagination || {} };
+    } catch (e: any) {
+      return { data: [], pagination: {} };
+    }
+  }
+
+  /** POST /api/events/{eventId}/report (report the event itself) */
+  public async reportEvent(
+    eventId: string | number,
+    reason: string,
+    description?: string
+  ): Promise<boolean> {
+    try {
+      const headers = await this.getHeaders();
+      await axios.post(`${this.baseUrl}/events/${eventId}/report`, { reason, description }, { headers, timeout: 10000 });
+      return true;
+    } catch (e: any) {
+      console.error('❌ Error reporting event:', e.response?.data || e.message);
+      return false;
+    }
+  }
+
+  /** Report an event comment (POST /api/events/{eventId}/comments/{commentId}/report) */
+  public async reportEventComment(
+    eventId: string | number,
+    commentId: string | number,
+    reason: string,
+    description?: string
+  ): Promise<boolean> {
+    try {
+      const headers = await this.getHeaders();
+      await axios.post(`${this.baseUrl}/events/${eventId}/comments/${commentId}/report`, { reason, description }, { headers, timeout: 10000 });
+      return true;
+    } catch (e: any) {
+      console.error('❌ Error reporting event comment:', e.response?.data || e.message);
+      return false;
+    }
+  }
+
   // ── CREATE FEED (full multipart with media, poll, location, schedule) ────
 
   public async createFeedFull(params: {
@@ -1185,6 +1575,9 @@ class FeedService {
     pollExpiresAt?: Date | null;
     groupId?: string | number | null;
     privacyLevel?: string;
+    challengeId?: string | number | null;
+    userChallengeId?: string | number | null;
+    eventId?: string | number | null;
   }): Promise<{ success: boolean; feed?: Feed; message?: string }> {
     try {
       console.log('🔄 Creating feed post (full)...');
@@ -1200,6 +1593,9 @@ class FeedService {
       if (params.latitude != null) formData.append('latitude', String(params.latitude));
       if (params.longitude != null) formData.append('longitude', String(params.longitude));
       if (params.scheduledAt) formData.append('scheduled_at', params.scheduledAt.toISOString());
+      if (params.challengeId) formData.append('challenge_id', String(params.challengeId));
+      if (params.userChallengeId) formData.append('user_challenge_id', String(params.userChallengeId));
+      if (params.eventId) formData.append('event_id', String(params.eventId));
       if (params.pollOptions && params.pollOptions.length > 0) {
         formData.append('poll_options', JSON.stringify(params.pollOptions));
         formData.append('allow_multiple_votes', params.allowMultipleVotes ? '1' : '0');
@@ -1231,6 +1627,75 @@ class FeedService {
     } catch (error: any) {
       console.error('Error creating feed (full):', error.response?.data || error.message);
       return { success: false, message: error.response?.data?.message || error.message };
+    }
+  }
+
+  // Get feeds specific to an event
+  public async getEventFeeds(eventId: string | number, page: number = 1, limit: number = 10): Promise<Feed[]> {
+    try {
+      console.log(`🔄 Fetching event feeds - eventId: ${eventId}, page: ${page}, limit: ${limit}`);
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/feeds/event/${eventId}/feeds`, {
+        headers,
+        params: { page, limit },
+        timeout: 10000,
+      });
+
+      if (response.status === 200 && response.data?.success) {
+        const feeds = response.data.data?.feeds || [];
+        return feeds.map((feed: any) => ({
+          ...feed,
+          likes_count: feed.stats?.reactions ?? feed.likes_count ?? 0,
+          comments_count: feed.stats?.comments ?? feed.comments_count ?? 0,
+          is_liked: feed.user_reacted ?? feed.is_liked ?? false,
+          is_following: feed.user?.is_following ?? feed.is_following ?? false,
+          has_media: (feed.media && feed.media.length > 0) ?? feed.has_media ?? false,
+          author: feed.user ? {
+            id: feed.user.id,
+            full_name: feed.user.full_name,
+            profile_image: feed.user.profile_image || feed.user.avatar_url,
+          } : feed.author,
+        }));
+      }
+      return [];
+    } catch (error: any) {
+      console.error('❌ Error fetching event feeds:', error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  // Get feeds specific to a challenge
+  public async getChallengeFeeds(challengeId: string | number, page: number = 1, limit: number = 10): Promise<Feed[]> {
+    try {
+      console.log(`🔄 Fetching challenge feeds - challengeId: ${challengeId}, page: ${page}, limit: ${limit}`);
+      const headers = await this.getHeaders();
+      const response = await axios.get(`${this.baseUrl}/feeds/challenge/${challengeId}/feeds`, {
+        headers,
+        params: { page, limit },
+        timeout: 10000,
+      });
+
+      if (response.status === 200 && response.data?.success) {
+        const feeds = response.data.data?.feeds || [];
+        return feeds.map((feed: any) => ({
+          ...feed,
+          // Backwards compatibility mappings for legacy UI components
+          likes_count: feed.stats?.reactions ?? feed.likes_count ?? 0,
+          comments_count: feed.stats?.comments ?? feed.comments_count ?? 0,
+          is_liked: feed.user_reacted ?? feed.is_liked ?? false,
+          is_following: feed.user?.is_following ?? feed.is_following ?? false,
+          has_media: (feed.media && feed.media.length > 0) ?? feed.has_media ?? false,
+          author: feed.user ? {
+            id: feed.user.id,
+            full_name: feed.user.full_name,
+            profile_image: feed.user.profile_image || feed.user.avatar_url,
+          } : feed.author,
+        }));
+      }
+      return [];
+    } catch (error: any) {
+      console.error('❌ Error fetching challenge feeds:', error.response?.data || error.message);
+      return [];
     }
   }
 

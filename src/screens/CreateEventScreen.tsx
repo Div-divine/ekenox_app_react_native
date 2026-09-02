@@ -121,6 +121,11 @@ export default function CreateEventScreen() {
     { label: 'VIP Guests', value: 'VIP_EVENT' },
     { label: 'Participants', value: 'PARTICIPANT_EVENT' },
   ];
+  const GROUP_ROLE_OPTIONS = [
+    { label: 'Admins', value: 'ADMIN_GROUP' },
+    { label: 'Moderators', value: 'MODERATOR_GROUP' },
+    { label: 'Members', value: 'MEMBER_GROUP' },
+  ];
   const roleOptions = organizerType === 'association' ? ASSO_ROLE_OPTIONS : organizerType === 'group' ? GROUP_ROLE_OPTIONS : EVENT_ROLE_OPTIONS;
 
   const toggleRole = (roleValue: string) => {
@@ -258,9 +263,7 @@ export default function CreateEventScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [16, 9],
-      quality: 0.8,
+      quality: 0.9,
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
@@ -341,7 +344,7 @@ export default function CreateEventScreen() {
 
       const result = await feedService.createEvent(payload);
       if (result.success) {
-        Alert.alert('🎉 Success', 'Event created successfully!', [
+        Alert.alert('ðŸŽ‰ Success', 'Event created successfully!', [
           {
             text: 'OK',
             onPress: () => {
@@ -433,7 +436,7 @@ export default function CreateEventScreen() {
 
   return (
     <View style={styles.container}>
-      {/* ── Top Custom Navigation Header ── */}
+      {/* â”€â”€ Top Custom Navigation Header â”€â”€ */}
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity
           style={styles.backBtn}
@@ -458,7 +461,7 @@ export default function CreateEventScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
-        {/* ── Banner Image Picker ── */}
+        {/* â”€â”€ Banner Image Picker â”€â”€ */}
         <TouchableOpacity style={styles.bannerPicker} onPress={handlePickBanner} activeOpacity={0.8}>
           {bannerImage ? (
             <View style={styles.bannerContainer}>
@@ -477,7 +480,7 @@ export default function CreateEventScreen() {
           )}
         </TouchableOpacity>
 
-        {/* ── Organizer Selector ── */}
+        {/* â”€â”€ Organizer Selector â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Create Event As *</Text>
           {(preSelectedAssoId || preSelectedGroupId) ? (
@@ -620,7 +623,7 @@ export default function CreateEventScreen() {
           )}
         </View>
 
-        {/* ── Title & Description ── */}
+        {/* â”€â”€ Title & Description â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Event Title *</Text>
           <TextInput
@@ -646,7 +649,7 @@ export default function CreateEventScreen() {
           />
         </View>
 
-        {/* ── Event Type & Location ── */}
+        {/* â”€â”€ Event Type & Location â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Location Type *</Text>
           <View style={styles.organizerTabs}>
@@ -682,7 +685,7 @@ export default function CreateEventScreen() {
           />
         </View>
 
-        {/* ── Dates and Times ── */}
+        {/* â”€â”€ Dates and Times â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Date & Time Settings *</Text>
           <View style={styles.dateTimeGrid}>
@@ -775,7 +778,7 @@ export default function CreateEventScreen() {
           )}
         </View>
 
-        {/* ── Category Select Chips ── */}
+        {/* â”€â”€ Category Select Chips â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Categories * (Select one or more)</Text>
           {categoriesLoading ? (
@@ -803,7 +806,7 @@ export default function CreateEventScreen() {
           )}
         </View>
 
-        {/* ── Max Attendees ── */}
+        {/* â”€â”€ Max Attendees â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Max Attendees Limit (Optional)</Text>
           <TextInput
@@ -816,7 +819,7 @@ export default function CreateEventScreen() {
           />
         </View>
 
-        {/* ── Tags Input ── */}
+        {/* â”€â”€ Tags Input â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Tags (Separated by commas)</Text>
           <TextInput
@@ -829,7 +832,7 @@ export default function CreateEventScreen() {
           />
         </View>
 
-        {/* ── Contact Details Section ── */}
+        {/* â”€â”€ Contact Details Section â”€â”€ */}
         <View style={styles.sectionDivider}>
           <Text style={styles.dividerTitle}>Contact Information (Optional)</Text>
         </View>
@@ -872,7 +875,7 @@ export default function CreateEventScreen() {
           />
         </View>
 
-        {/* ── Privacy Level ── */}
+        {/* â”€â”€ Privacy Level â”€â”€ */}
         <View style={styles.fieldSection}>
           <Text style={styles.fieldLabel}>Event Privacy</Text>
           <View style={styles.organizerTabs}>
@@ -894,7 +897,7 @@ export default function CreateEventScreen() {
 
           {privacyLevel === 'private' && (
             organizerType === 'user' ? (
-              // ── Personal user picker ──
+              // â”€â”€ Personal user picker â”€â”€
               <View style={{ marginTop: 12 }}>
                 <Text style={[styles.fieldLabel, { marginBottom: 8, fontSize: 13 }]}>
                   Who can access? (Select friends / search users)
@@ -1014,7 +1017,7 @@ export default function CreateEventScreen() {
                 </View>
               </View>
             ) : (
-              // ── Role chips selection ──
+              // â”€â”€ Role chips selection â”€â”€
               <View style={{ marginTop: 12 }}>
                 <Text style={[styles.fieldLabel, { marginBottom: 8, fontSize: 13 }]}>
                   Who can attend? (select roles)

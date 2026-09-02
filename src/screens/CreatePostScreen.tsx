@@ -308,6 +308,7 @@ const CreatePostScreen: React.FC<CreatePostScreenProps> = ({ navigation, route, 
           allowMultipleVotes: postType === 'poll' ? allowMultipleVotes : undefined,
           pollExpiresAt: postType === 'poll' ? pollExpiresAt : undefined,
           groupId: selectedGroup?.id || null,
+          eventId: route?.params?.eventId || route?.params?.event?.id || null,
           privacyLevel,
         });
 
@@ -800,7 +801,7 @@ const CreatePostScreen: React.FC<CreatePostScreenProps> = ({ navigation, route, 
                         {item.content || '(No content)'}
                       </Text>
                       <Text style={styles.draftCardMeta}>
-                        {item.post_type === 'poll' ? '📊 Poll • ' : ''}
+                        {item.post_type === 'poll' ? 'ðŸ“Š Poll â€¢ ' : ''}
                         Last edited: {new Date(item.created_at || Date.now()).toLocaleString()}
                       </Text>
                     </TouchableOpacity>

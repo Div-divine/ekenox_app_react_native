@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<title>Ekenox - Comments</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-fixed-variant": "#00522f",
+                        "error": "#ba1a1a",
+                        "secondary-fixed-dim": "#bdcabe",
+                        "primary": "#006d40",
+                        "primary-fixed-dim": "#5cde97",
+                        "tertiary": "#5c5f60",
+                        "on-tertiary-fixed-variant": "#444748",
+                        "primary-fixed": "#7afbb1",
+                        "surface-bright": "#f9f9fc",
+                        "on-secondary-fixed": "#131e17",
+                        "tertiary-container": "#9ea1a2",
+                        "inverse-on-surface": "#f0f0f3",
+                        "background": "#f9f9fc",
+                        "inverse-primary": "#5cde97",
+                        "secondary": "#556158",
+                        "surface": "#f9f9fc",
+                        "on-secondary": "#ffffff",
+                        "on-secondary-container": "#5b675e",
+                        "tertiary-fixed-dim": "#c4c7c8",
+                        "tertiary-fixed": "#e1e3e4",
+                        "secondary-container": "#d9e6da",
+                        "surface-tint": "#006d40",
+                        "on-primary-container": "#004024",
+                        "on-primary-fixed": "#002110",
+                        "on-tertiary-fixed": "#191c1d",
+                        "surface-container-lowest": "#ffffff",
+                        "on-background": "#1a1c1e",
+                        "outline-variant": "#bccabd",
+                        "on-surface": "#1a1c1e",
+                        "on-primary": "#ffffff",
+                        "surface-dim": "#dadadc",
+                        "surface-container-low": "#f3f3f6",
+                        "on-error-container": "#93000a",
+                        "surface-container": "#eeeef0",
+                        "surface-variant": "#e2e2e5",
+                        "secondary-fixed": "#d9e6da",
+                        "error-container": "#ffdad6",
+                        "on-error": "#ffffff",
+                        "surface-container-highest": "#e2e2e5",
+                        "on-tertiary-container": "#343839",
+                        "primary-container": "#2bb673",
+                        "surface-container-high": "#e8e8ea",
+                        "on-tertiary": "#ffffff",
+                        "on-secondary-fixed-variant": "#3e4a41",
+                        "on-surface-variant": "#3d4a40",
+                        "outline": "#6d7a6f",
+                        "inverse-surface": "#2f3133"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xl": "32px",
+                        "gutter": "12px",
+                        "md": "16px",
+                        "xs": "4px",
+                        "lg": "24px",
+                        "container-padding": "20px",
+                        "unit": "4px",
+                        "sm": "8px",
+                        "safe": "env(safe-area-inset-bottom, 20px)"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Manrope"],
+                        "display-lg": ["Manrope"],
+                        "headline-md-mobile": ["Manrope"],
+                        "body-md": ["Manrope"],
+                        "body-lg": ["Manrope"],
+                        "headline-sm": ["Manrope"],
+                        "label-md": ["Manrope"],
+                        "label-caps": ["Manrope"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["20px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "display-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md-mobile": ["18px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-sm": ["16px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'Manrope', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .thread-line { width: 2px; background-color: #e2e2e5; margin-left: 20px; position: absolute; top: 48px; bottom: 0; }
+        .comment-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; z-index: 10; position: relative; }
+        .reply-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; z-index: 10; position: relative; }
+        /* Hide scrollbar for clean UI */
+        ::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body class="bg-background text-on-background antialiased flex flex-col h-screen overflow-hidden">
+<!-- Top App Bar -->
+<header class="bg-surface dark:bg-on-background fixed top-0 w-full z-50 transition-all duration-200">
+<div class="flex justify-between items-center px-container-padding h-16 w-full max-w-3xl mx-auto border-b border-surface-variant">
+<button class="text-on-surface hover:opacity-80 transition-opacity active:scale-95 p-2 -ml-2 rounded-full focus:outline-none focus:ring-2 focus:ring-primary-container">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="font-headline-md text-headline-md font-bold text-on-surface">Comments</h1>
+<div class="w-10"></div> <!-- Placeholder for balance -->
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 overflow-y-auto pt-16 pb-[100px] w-full max-w-3xl mx-auto px-container-padding space-y-lg mt-md">
+<!-- Comment 1: Top Level -->
+<div class="relative w-full">
+<div class="flex items-start space-x-sm">
+<img alt="Avatar" class="comment-avatar shadow-sm shrink-0" data-alt="Portrait of a young woman with curly hair, natural lighting, soft focus background, wearing a casual linen shirt, modern bright light-mode aesthetic, corporate yet approachable vibe, detailed 8k photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuD_MIboRoCVLrh4f2-OyvWTWGC3-LUWbu3Pn_dlpYQdU0drK24Rhj9DYhzNIVA3uEPUtLHXymLxJNTmUoDW5xnhdQHxk6Nx3CTuh6fso3tBLomRHvfx5Apclmfk2BineQb2hMMTKK5XbJQFMs1qgA7RkT4_gLJB2ah-vECfSQJzCPDPdQOLkrXltxM9ZuQygKTPuo22qCoZ7c1F7JLE9hFPQA0HiOe3PANxLCbt44fzquJySo9O-Y7-"/>
+<div class="flex-1 min-w-0">
+<div class="flex items-baseline space-x-2">
+<span class="font-headline-sm text-headline-sm text-on-surface truncate">Elena Rostova</span>
+<span class="font-label-md text-label-md text-on-surface-variant">2h ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mt-1 break-words">
+                        This is exactly what the initiative needed. The integration of sustainable materials in the new phase is a game-changer. Looking forward to the implementation details next week!
+                    </p>
+<div class="flex items-center space-x-md mt-sm">
+<button class="flex items-center space-x-xs text-on-surface-variant hover:text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[18px]" data-icon="favorite">favorite</span>
+<span class="font-label-md text-label-md">24</span>
+</button>
+<button class="font-label-md text-label-md text-on-surface-variant font-semibold hover:text-primary transition-colors focus:outline-none">Reply</button>
+</div>
+</div>
+</div>
+<div class="thread-line left-0 hidden md:block"></div>
+<!-- Nested Replies (Level 1) -->
+<div class="pl-12 mt-md space-y-md relative">
+<!-- Reply 1.1 -->
+<div class="relative">
+<div class="flex items-start space-x-sm">
+<img alt="Avatar" class="reply-avatar shadow-sm shrink-0" data-alt="Portrait of a man in his late 30s with short dark hair and a neat beard, wearing a light gray turtleneck sweater, standing in a bright minimalist office setting, sharp focus, professional photography, natural daylight." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA6Y30Nt9X6PiqGdzSiV8D0yn028qdxiZjaNr-ayjWoJLLx9f1cLNJyE9y10eBNcc-vmYORqEi8jRqwDEGhmWXvQ1HSLEuvn4zNoiXhGjwbzMANUfdh55SpQvx94i7wGlleh7jUd9ilDNGiK09oN4WoPkMcWPnzo43NKbKgUV_FZD7uKx3QS8fobrFSMCMU60FxdgixZfDRQabKAihWeC-tQ_hiKth-faSJcjd-EuQkWyFqjnIGwwRX"/>
+<div class="flex-1 min-w-0">
+<div class="flex items-baseline space-x-2">
+<span class="font-headline-sm text-headline-sm text-on-surface truncate">Marcus Chen</span>
+<span class="font-label-md text-label-md text-on-surface-variant">1h ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mt-1 break-words">
+                                Agreed. We've been reviewing the logistics and the local supplier network seems robust enough to handle the initial volume.
+                            </p>
+<div class="flex items-center space-x-md mt-sm">
+<button class="flex items-center space-x-xs text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[18px]" data-icon="favorite" data-weight="fill" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="font-label-md text-label-md">8</span>
+</button>
+<button class="font-label-md text-label-md text-on-surface-variant font-semibold hover:text-primary transition-colors focus:outline-none">Reply</button>
+</div>
+</div>
+</div>
+<div class="thread-line left-[-32px] hidden md:block"></div>
+<!-- Nested Reply (Level 2) -->
+<div class="pl-10 mt-md relative">
+<div class="flex items-start space-x-sm">
+<img alt="Avatar" class="reply-avatar shadow-sm shrink-0" data-alt="Close up portrait of a young professional woman with glasses, dark hair pulled back, wearing a navy blazer over a white shirt, bright modern office background with subtle greenery, high resolution, soft cinematic lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuD11C_hVZyJIrIjZZR-dOSvU53OBLx7M7atvy1ePme9UtJ8auZ2Y8qv9bzBEcURvRsv2looi9byLKL48YUWP_ULRlfF_PtsqRtGGyfKH7qnBk7zS3aBP60KGYrXQJzp_8NCd1Tl3wNYfKLoE_3tiDMVJxzjS3-ZLzegAC0oDYXl5qDgSl_JpJ9dePyuiPxWmDtzTODMKBdo68gCOVeg-NoP92QR1q6kJ0vdteL3pPzrviLmjabnWwbn"/>
+<div class="flex-1 min-w-0">
+<div class="flex items-baseline space-x-2">
+<span class="font-headline-sm text-headline-sm text-on-surface truncate">Sarah Jenkins</span>
+<span class="font-label-md text-label-md text-on-surface-variant">45m ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mt-1 break-words">
+<span class="text-primary-container font-medium">@Marcus Chen</span> Can you share the supplier list? I want to cross-reference with our Q3 audit.
+                                </p>
+<div class="flex items-center space-x-md mt-sm">
+<button class="flex items-center space-x-xs text-on-surface-variant hover:text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[18px]" data-icon="favorite">favorite</span>
+<span class="font-label-md text-label-md">2</span>
+</button>
+<button class="font-label-md text-label-md text-on-surface-variant font-semibold hover:text-primary transition-colors focus:outline-none">Reply</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<hr class="border-t border-surface-variant my-lg"/>
+<!-- Comment 2: Top Level -->
+<div class="relative w-full">
+<div class="flex items-start space-x-sm">
+<img alt="Avatar" class="comment-avatar shadow-sm shrink-0" data-alt="Portrait of an older gentleman with white hair and a warm smile, wearing a casual tweed jacket, standing outdoors in a modern urban park setting, bright sunny day, sharp details, vibrant yet professional color palette." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAVr-XBKwRADKucfwH9hXDShMKu7jjg-xo0AwJdJoBjKUb5plBavwms0bJ-1U3PEOAT2yv25cRyznlzOMQfeZ8PJp4sP3P8Hszi2ssrpk9CIdfCeY27hfk4Tig_mWvCMwBXUXvtOIf2FYgjc9f2ZM3Edo43vxqEihh_ZlClZDPxMfdBcx7iEmHcXPcsb1KUpLFgJafpZCD46aFO5L3A-y12YiCqPG9Y9AHmEQrDNFE_8nPDx2fQP7DF"/>
+<div class="flex-1 min-w-0">
+<div class="flex items-baseline space-x-2">
+<span class="font-headline-sm text-headline-sm text-on-surface truncate">Dr. Aris Thorne</span>
+<span class="font-label-md text-label-md text-on-surface-variant">3h ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mt-1 break-words">
+                        I noticed the metrics for water conservation were slightly adjusted in the final report. Is there a breakdown of how the new algorithm calculates regional variance? Excellent work overall.
+                    </p>
+<div class="flex items-center space-x-md mt-sm">
+<button class="flex items-center space-x-xs text-on-surface-variant hover:text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[18px]" data-icon="favorite">favorite</span>
+<span class="font-label-md text-label-md">12</span>
+</button>
+<button class="font-label-md text-label-md text-on-surface-variant font-semibold hover:text-primary transition-colors focus:outline-none">Reply</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Sticky Input Area -->
+<div class="fixed bottom-0 w-full bg-surface/95 backdrop-blur-md border-t border-surface-variant pb-safe z-40">
+<div class="max-w-3xl mx-auto px-container-padding py-3">
+<div class="flex items-end space-x-sm bg-surface-container-low rounded-xl p-2 border border-surface-variant focus-within:border-primary-container transition-colors shadow-sm">
+<img alt="Your Avatar" class="w-8 h-8 rounded-full shrink-0 mb-1" data-alt="User profile avatar, a minimalist illustration of a person in a bright green and white color scheme, flat design, clean lines, corporate modern style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBsEn6W5CuXfCu0kqzN8HkZbjX7pVsWkdjct92wlXSSoN-Jf63fzvy7uqz5uoj7hpJyFlXoOYah4lCxDsxsliNKkhafajiQo6FIjcJEVh0sGHmQeY-7bo7l2syzA_dmaNa7AyValRpZmssFmimPGVynM-Ka_b63pET8TNWHzCKQYHDYk9QBd4LIYR8QiARLVRd9qH9Wd8-yL9VSR7vfvV3nx3NfvQDN8exOSvgnPd2mYGR1ri4uKfRN"/>
+<div class="flex-1 relative">
+<textarea class="w-full bg-transparent border-none focus:ring-0 resize-none font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant py-2 px-1 min-h-[40px] max-h-[120px]" oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120) + 'px'" placeholder="Add a comment..." rows="1"></textarea>
+</div>
+<button class="bg-primary-container text-on-primary-container rounded-lg px-4 py-2 font-headline-sm text-headline-sm hover:opacity-90 active:scale-95 transition-all focus:outline-none mb-1 shrink-0">
+                    Post
+                </button>
+</div>
+</div>
+</div>
+</body></html>
