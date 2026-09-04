@@ -699,7 +699,8 @@ export const FeedScreen = () => {
       const chatCount = await chatService.getTotalUnreadCount();
       setUnreadChatCount(chatCount);
       const collabSummary = await collaborationService.getSummary().catch(() => null);
-      setPendingCollabCount(collabSummary?.pending_received || 0);
+      const totalCollabPending = collabSummary?.total_pending_action ?? ((collabSummary?.pending_received || 0) + (collabSummary?.pending_invitations || 0));
+      setPendingCollabCount(totalCollabPending);
 
     } catch (error) {
       console.error('❌ Failed to fetch feed/groups/events data:', error);
@@ -725,7 +726,8 @@ export const FeedScreen = () => {
       const chatCount = await chatService.getTotalUnreadCount();
       setUnreadChatCount(chatCount);
       const collabSummary = await collaborationService.getSummary().catch(() => null);
-      setPendingCollabCount(collabSummary?.pending_received || 0);
+      const totalCollabPending = collabSummary?.total_pending_action ?? ((collabSummary?.pending_received || 0) + (collabSummary?.pending_invitations || 0));
+      setPendingCollabCount(totalCollabPending);
     } catch (err) {
       console.warn('Failed to load unread count:', err);
     }

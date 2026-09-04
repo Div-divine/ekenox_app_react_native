@@ -1339,7 +1339,7 @@ export default function ProfileScreen() {
         onClose={() => setInquiriesListModalVisible(false)}
         onOpenChatWithUser={(targetId, targetName) => {
           setInquiriesListModalVisible(false);
-          handleDirectMessage();
+          navigation.navigate('Messages');
         }}
       />
     </View>

@@ -272,31 +272,32 @@ export const CollaborationInquiriesListModal: React.FC<CollaborationInquiriesLis
                       </View>
                     )}
 
-                    <View style={styles.userRow}>
-                      <Text style={styles.userName} numberOfLines={1}>
-                        {otherUser?.full_name}
-                      </Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            { backgroundColor: `${statusColor}20` },
-                          ]}
-                        >
-                          <Text style={[styles.statusBadgeText, { color: statusColor }]}>
-                            {item.status.toUpperCase()}
-                          </Text>
+                    <View style={styles.cardHeaderInfo}>
+                      <View style={styles.userRow}>
+                        <Text style={styles.userName} numberOfLines={1}>
+                          {otherUser?.full_name}
+                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              { backgroundColor: `${statusColor}20` },
+                            ]}
+                          >
+                            <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+                              {item.status.toUpperCase()}
+                            </Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
                         </View>
-                        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
                       </View>
-                    </View>
 
-                    <Text style={styles.orgText} numberOfLines={1}>
-                      {item.organization_or_brand ? `🏢 ${item.organization_or_brand} • ` : ''}
-                      {item.collaboration_type.replace('_', ' ')}
-                    </Text>
+                      <Text style={styles.orgText} numberOfLines={1}>
+                        {item.organization_or_brand ? `🏢 ${item.organization_or_brand} • ` : ''}
+                        {item.collaboration_type.replace('_', ' ')}
+                      </Text>
+                    </View>
                   </View>
-                </View>
 
                 {/* Subject */}
                 <Text style={styles.subjectText} numberOfLines={2}>

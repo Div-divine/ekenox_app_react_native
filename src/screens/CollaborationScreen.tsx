@@ -28,13 +28,21 @@ export const CollaborationScreen: React.FC = () => {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
 
-  const [activeTab, setActiveTab] = useState<'received' | 'sent'>('received');
+  const [activeTab, setActiveTab] = useState<'received' | 'sent' | 'invitations'>('received');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [inquiries, setInquiries] = useState<CollaborationInquiry[]>([]);
+  const [invitationLogs, setInvitationLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<CollaborationSummary | null>(null);
+  const [myInvitations, setMyInvitations] = useState<any[]>([]);
+  const [respondingInviteId, setRespondingInviteId] = useState<number | null>(null);
+
+  // Cancellation Modal State for Sent Invites
+  const [cancelInviteTarget, setCancelInviteTarget] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>('');
+  const [isCancellingInvite, setIsCancellingInvite] = useState<boolean>(false);
 
   // Action Modal State (Accept / Decline / Complete)
   const [selectedInquiry, setSelectedInquiry] = useState<CollaborationInquiry | null>(null);
@@ -45,18 +53,46 @@ export const CollaborationScreen: React.FC = () => {
   // Detail Modal State
   const [detailModalVisible, setDetailModalVisible] = useState<boolean>(false);
   const [detailInquiry, setDetailInquiry] = useState<CollaborationInquiry | null>(null);
+  const [activeInviteForDetail, setActiveInviteForDetail] = useState<any | null>(null);
+
+  const handleOpenInvitationDetail = async (inv: any) => {
+    try {
+      if (inv.inquiry) {
+        setDetailInquiry(inv.inquiry);
+        setActiveInviteForDetail(inv);
+        setDetailModalVisible(true);
+      } else {
+        const details = await collaborationService.getInquiryDetails(inv.inquiry_id);
+        setDetailInquiry(details);
+        setActiveInviteForDetail(inv);
+        setDetailModalVisible(true);
+      }
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to load collaboration details.');
+    }
+  };
 
   const loadData = useCallback(async () => {
     try {
-      const summaryData = await collaborationService.getSummary().catch(() => null);
+      const [summaryData, invitesData] = await Promise.all([
+        collaborationService.getSummary().catch(() => null),
+        collaborationService.getMyInvitations().catch(() => null),
+      ]);
       setSummary(summaryData);
+      setMyInvitations(invitesData?.invitations || []);
 
       const statusParam = statusFilter === 'all' ? undefined : statusFilter;
-      const list =
-        activeTab === 'received'
-          ? await collaborationService.getReceivedInquiries(statusParam)
-          : await collaborationService.getSentInquiries(statusParam);
-      setInquiries(list || []);
+      if (activeTab === 'invitations') {
+        const logsRes = await collaborationService.getInvitationLogs(statusParam).catch(() => ({ invitations: [] }));
+        setInvitationLogs(logsRes.invitations || []);
+        setInquiries([]);
+      } else {
+        const list =
+          activeTab === 'received'
+            ? await collaborationService.getReceivedInquiries(statusParam)
+            : await collaborationService.getSentInquiries(statusParam);
+        setInquiries(list || []);
+      }
     } catch (err: any) {
       console.error('Failed to load inquiries:', err);
       Alert.alert('Error', 'Failed to load collaboration inquiries.');
@@ -65,6 +101,44 @@ export const CollaborationScreen: React.FC = () => {
       setRefreshing(false);
     }
   }, [activeTab, statusFilter]);
+
+  const handleRespondInvitation = async (inviteId: number, action: 'accept' | 'decline') => {
+    setRespondingInviteId(inviteId);
+    try {
+      const res = await collaborationService.respondToInvitation(inviteId, action);
+      Alert.alert(
+        action === 'accept' ? 'Invitation Accepted! 🎉' : 'Invitation Declined',
+        res.message || (action === 'accept' ? 'You have joined the collaboration workspace.' : 'Invitation declined.')
+      );
+      loadData();
+    } catch (err: any) {
+      Alert.alert('Error', err?.response?.data?.message || err?.message || 'Failed to respond to invitation.');
+    } finally {
+      setRespondingInviteId(null);
+    }
+  };
+
+  const handleConfirmCancelInvite = async () => {
+    if (!cancelInviteTarget) return;
+    setIsCancellingInvite(true);
+    try {
+      await collaborationService.cancelInvitation(
+        cancelInviteTarget.id,
+        cancelReason.trim() || undefined
+      );
+      Alert.alert('Invitation Cancelled', 'The collaboration invitation has been cancelled.');
+      setCancelInviteTarget(null);
+      setCancelReason('');
+      loadData();
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err?.response?.data?.message || err?.message || 'Failed to cancel invitation.'
+      );
+    } finally {
+      setIsCancellingInvite(false);
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -129,26 +203,56 @@ export const CollaborationScreen: React.FC = () => {
     );
   };
 
-  // Open Direct Chat with partner
-  const handleStartChat = async (targetUserId: number, targetUserName: string, avatarUrl?: string | null) => {
+  // Open Dedicated Collaboration Workspace Chat
+  const handleStartChat = async (inquiry: CollaborationInquiry) => {
     try {
-      const room = await chatService.getOrCreateDirectChat(targetUserId);
-      const chatRoom = room?.chatRoom || room;
+      const details = await collaborationService.getCollaborationChat(inquiry.id);
+      const chatRoom = details?.chat_room;
       if (chatRoom?.id) {
         if (detailModalVisible) {
           setDetailModalVisible(false);
         }
         navigation.navigate('ChatRoom', {
           chatRoomId: chatRoom.id,
-          name: targetUserName,
-          logo: avatarUrl,
-          type: 'direct',
+          name: chatRoom.name || `Collab: ${inquiry.subject}`,
+          type: 'collaboration',
+          isGroup: true,
+          collaborationData: {
+            inquiryId: inquiry.id,
+            subject: inquiry.subject,
+            collaborationType: inquiry.collaboration_type,
+            budgetAmount: inquiry.budget_amount,
+            currency: inquiry.currency,
+            compensationType: inquiry.compensation_type,
+            status: inquiry.status,
+            targetDate: inquiry.target_date,
+            sender: inquiry.sender,
+            receiver: inquiry.receiver,
+          },
         });
       } else {
-        Alert.alert('Chat', 'Could not open chat room with this user.');
+        Alert.alert('Workspace', 'Could not open collaboration workspace room.');
       }
     } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to start chat session.');
+      // Fallback to direct chat if not accepted yet
+      const otherUser = activeTab === 'received' ? inquiry.sender : inquiry.receiver;
+      try {
+        const room = await chatService.getOrCreateDirectChat(otherUser.id);
+        const directChatRoom = room?.chatRoom || room;
+        if (directChatRoom?.id) {
+          if (detailModalVisible) {
+            setDetailModalVisible(false);
+          }
+          navigation.navigate('ChatRoom', {
+            chatRoomId: directChatRoom.id,
+            name: otherUser.full_name,
+            logo: otherUser.profile_image,
+            type: 'direct',
+          });
+        }
+      } catch (fallbackErr: any) {
+        Alert.alert('Error', err?.response?.data?.message || err?.message || 'Failed to open chat.');
+      }
     }
   };
 
@@ -182,6 +286,19 @@ export const CollaborationScreen: React.FC = () => {
     );
   });
 
+  const filteredInvitationLogs = invitationLogs.filter((inv) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      (inv.inquiry_subject && inv.inquiry_subject.toLowerCase().includes(q)) ||
+      (inv.email && inv.email.toLowerCase().includes(q)) ||
+      (inv.invited_user?.full_name && inv.invited_user.full_name.toLowerCase().includes(q)) ||
+      (inv.invited_by?.full_name && inv.invited_by.full_name.toLowerCase().includes(q)) ||
+      (inv.role && inv.role.toLowerCase().includes(q)) ||
+      (inv.message && inv.message.toLowerCase().includes(q))
+    );
+  });
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* ── Top Header ── */}
@@ -192,7 +309,7 @@ export const CollaborationScreen: React.FC = () => {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Collaboration Hub</Text>
           <Text style={styles.headerSubtitle}>
-            {summary ? `${summary.pending_received} pending • ${summary.total_sent} sent` : 'Manage proposals'}
+            {summary ? `${summary.pending_received} pending • ${summary.total_sent} sent • ${summary.pending_invitations || 0} invites` : 'Manage proposals'}
           </Text>
         </View>
         <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh}>
@@ -233,15 +350,18 @@ export const CollaborationScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* ── Primary Tabs: Received vs Sent ── */}
+      {/* ── Primary Tabs: Received vs Sent vs Invitation Logs ── */}
       <View style={styles.tabContainer}>
         <TouchableOpacity
           style={[styles.tabBtn, activeTab === 'received' && styles.activeTabBtn]}
-          onPress={() => setActiveTab('received')}
+          onPress={() => {
+            setActiveTab('received');
+            setStatusFilter('all');
+          }}
         >
           <Ionicons
             name="mail-unread-outline"
-            size={18}
+            size={16}
             color={activeTab === 'received' ? '#4F46E5' : '#64748B'}
           />
           <Text style={[styles.tabText, activeTab === 'received' && styles.activeTabText]}>
@@ -256,18 +376,154 @@ export const CollaborationScreen: React.FC = () => {
 
         <TouchableOpacity
           style={[styles.tabBtn, activeTab === 'sent' && styles.activeTabBtn]}
-          onPress={() => setActiveTab('sent')}
+          onPress={() => {
+            setActiveTab('sent');
+            setStatusFilter('all');
+          }}
         >
           <Ionicons
             name="paper-plane-outline"
-            size={18}
+            size={16}
             color={activeTab === 'sent' ? '#4F46E5' : '#64748B'}
           />
           <Text style={[styles.tabText, activeTab === 'sent' && styles.activeTabText]}>
-            Sent Proposals ({summary?.total_sent || 0})
+            Sent ({summary?.total_sent || 0})
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabBtn, activeTab === 'invitations' && styles.activeTabBtn]}
+          onPress={() => {
+            setActiveTab('invitations');
+            setStatusFilter('all');
+          }}
+        >
+          <Ionicons
+            name="people-outline"
+            size={16}
+            color={activeTab === 'invitations' ? '#4F46E5' : '#64748B'}
+          />
+          <Text style={[styles.tabText, activeTab === 'invitations' && styles.activeTabText]}>
+            Invitations
+          </Text>
+          {summary && (summary.pending_invitations || 0) > 0 && (
+            <View style={[styles.badgeCount, { backgroundColor: '#EF4444' }]}>
+              <Text style={styles.badgeCountText}>{summary.pending_invitations}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
+
+      {/* ── Received Collaboration Workspace Invitations (Quick banner when on Received/Sent tab) ── */}
+      {activeTab !== 'invitations' && myInvitations.length > 0 && (
+        <View style={{ marginHorizontal: 16, marginTop: 12, marginBottom: 6 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="mail-unread" size={16} color="#4F46E5" />
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>
+                Pending Workspace Invitations ({myInvitations.length})
+              </Text>
+            </View>
+          </View>
+
+          {myInvitations.map((inv) => {
+            const isResponding = respondingInviteId === inv.id;
+            return (
+              <View
+                key={inv.id}
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 8,
+                  borderWidth: 1,
+                  borderColor: '#C7D2FE',
+                  shadowColor: '#4F46E5',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.06,
+                  shadowRadius: 4,
+                  elevation: 2,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B', flex: 1, marginRight: 8 }} numberOfLines={1}>
+                    📌 {inv.inquiry_subject}
+                  </Text>
+                  <View style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#4F46E5' }}>
+                      {inv.role === 'CHATROOM_ADMIN' ? 'ADMIN INVITE' : 'COLLABORATOR INVITE'}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={{ fontSize: 12, color: '#475569', marginBottom: 6 }}>
+                  Invited by <Text style={{ fontWeight: '700', color: '#0F172A' }}>{inv.invited_by?.full_name || inv.invited_by?.pseudo || 'Partner'}</Text>
+                </Text>
+
+                {inv.message ? (
+                  <View style={{ backgroundColor: '#F8FAFC', padding: 8, borderRadius: 6, marginBottom: 8 }}>
+                    <Text style={{ fontSize: 11, color: '#64748B', fontStyle: 'italic' }}>
+                      "{inv.message}"
+                    </Text>
+                  </View>
+                ) : null}
+
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: '#EEF2FF',
+                    paddingVertical: 7,
+                    borderRadius: 8,
+                    marginBottom: 8,
+                  }}
+                  onPress={() => handleOpenInvitationDetail(inv)}
+                >
+                  <Ionicons name="document-text-outline" size={14} color="#4F46E5" style={{ marginRight: 6 }} />
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#4F46E5' }}>
+                    View Full Collaboration Details
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#F1F5F9',
+                      paddingVertical: 8,
+                      borderRadius: 8,
+                      alignItems: 'center',
+                    }}
+                    onPress={() => handleRespondInvitation(inv.id, 'decline')}
+                    disabled={isResponding}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#64748B' }}>Decline</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1.5,
+                      backgroundColor: '#4F46E5',
+                      paddingVertical: 8,
+                      borderRadius: 8,
+                      alignItems: 'center',
+                    }}
+                    onPress={() => handleRespondInvitation(inv.id, 'accept')}
+                    disabled={isResponding}
+                  >
+                    {isResponding ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFF' }}>Accept & Join Chat</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       {/* ── Search Bar ── */}
       <View style={styles.searchBarContainer}>
@@ -294,7 +550,10 @@ export const CollaborationScreen: React.FC = () => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.statusFilterBar}
         >
-          {['all', 'pending', 'accepted', 'completed', 'declined', 'cancelled'].map((st) => {
+          {(activeTab === 'invitations'
+            ? ['all', 'pending', 'accepted', 'declined', 'cancelled']
+            : ['all', 'pending', 'accepted', 'completed', 'declined', 'cancelled']
+          ).map((st) => {
             const isSelected = statusFilter === st;
             return (
               <TouchableOpacity
@@ -316,12 +575,164 @@ export const CollaborationScreen: React.FC = () => {
         </ScrollView>
       </View>
 
-      {/* ── Inquiries FlatList ── */}
+      {/* ── List Content: Inquiries vs Invitation Logs ── */}
       {loading ? (
         <View style={styles.centerLoading}>
           <ActivityIndicator size="large" color="#4F46E5" />
-          <Text style={styles.loadingText}>Fetching inquiries...</Text>
+          <Text style={styles.loadingText}>Fetching collaboration data...</Text>
         </View>
+      ) : activeTab === 'invitations' ? (
+        <FlatList
+          data={filteredInvitationLogs}
+          keyExtractor={(item) => String(item.id)}
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 24 }]}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4F46E5']} />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="mail-unread-outline" size={54} color="#CBD5E1" />
+              <Text style={styles.emptyTitle}>No invitations found</Text>
+              <Text style={styles.emptySubtitle}>
+                {searchQuery
+                  ? 'No invitation records matched your search keyword.'
+                  : statusFilter !== 'all'
+                  ? `No ${statusFilter} invitations in your records.`
+                  : 'All sent and received collaboration invitations will be logged here.'}
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const isPending = item.status === 'pending';
+            const isAccepted = item.status === 'accepted';
+            const isDeclined = item.status === 'declined';
+            const isCancelled = item.status === 'cancelled';
+            const statusColor = getStatusColor(item.status);
+            const isResponding = respondingInviteId === item.id;
+
+            return (
+              <View style={styles.card}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#0F172A', flex: 1, marginRight: 8 }} numberOfLines={1}>
+                    📌 {item.inquiry_subject || 'Collaboration Workspace'}
+                  </Text>
+                  <View style={[styles.statusBadge, { backgroundColor: `${statusColor}18` }]}>
+                    <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+                      {item.status.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={{ fontSize: 12, color: '#475569', marginBottom: 4 }}>
+                  <Text style={{ fontWeight: '700' }}>To:</Text> {item.invited_user?.full_name || item.email} • Role:{' '}
+                  <Text style={{ fontWeight: '700', color: '#4F46E5' }}>
+                    {item.role === 'CHATROOM_ADMIN' ? 'Admin' : 'Member'}
+                  </Text>
+                </Text>
+
+                <Text style={{ fontSize: 11, color: '#64748B', marginBottom: 8 }}>
+                  Invited by <Text style={{ fontWeight: '700', color: '#0F172A' }}>{item.invited_by?.full_name || 'Owner'}</Text>
+                  {item.created_at ? ` • ${new Date(item.created_at).toLocaleDateString()}` : ''}
+                </Text>
+
+                {item.message ? (
+                  <View style={{ backgroundColor: '#F8FAFC', padding: 10, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: '#F1F5F9' }}>
+                    <Text style={{ fontSize: 12, color: '#475569', fontStyle: 'italic' }}>
+                      "{item.message}"
+                    </Text>
+                  </View>
+                ) : null}
+
+                {item.cancellation_reason ? (
+                  <View style={{ backgroundColor: '#FEF2F2', padding: 10, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: '#FECACA' }}>
+                    <Text style={{ fontSize: 11, color: '#991B1B' }}>
+                      Cancellation Reason: "{item.cancellation_reason}"
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* View Full Collaboration Details Link */}
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: '#EEF2FF',
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                    marginBottom: 8,
+                  }}
+                  onPress={() => handleOpenInvitationDetail(item)}
+                >
+                  <Ionicons name="document-text-outline" size={14} color="#4F46E5" style={{ marginRight: 6 }} />
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#4F46E5' }}>
+                    View Full Collaboration Details
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Actions Row */}
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+                  {isPending && (
+                    <>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1,
+                          backgroundColor: '#F1F5F9',
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          alignItems: 'center',
+                        }}
+                        onPress={() => {
+                          setCancelInviteTarget(item);
+                          setCancelReason('');
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#DC2626' }}>Cancel Invite</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={{
+                          flex: 1.5,
+                          backgroundColor: '#4F46E5',
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          alignItems: 'center',
+                        }}
+                        onPress={() => handleRespondInvitation(item.id, 'accept')}
+                        disabled={isResponding}
+                      >
+                        {isResponding ? (
+                          <ActivityIndicator size="small" color="#FFF" />
+                        ) : (
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFF' }}>Accept & Join</Text>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {isAccepted && (
+                    <TouchableOpacity
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#4F46E5',
+                        paddingVertical: 8,
+                        borderRadius: 8,
+                        alignItems: 'center',
+                        flexDirection: 'row',
+                        justifyContent: 'center',
+                        gap: 6,
+                      }}
+                      onPress={() => handleStartChat(item.inquiry || { id: item.inquiry_id, subject: item.inquiry_subject })}
+                    >
+                      <Ionicons name="chatbubbles" size={14} color="#FFF" />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFF' }}>Open Workspace Chat</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            );
+          }}
+        />
       ) : (
         <FlatList
           data={filteredInquiries}
@@ -480,16 +891,10 @@ export const CollaborationScreen: React.FC = () => {
                   <View style={styles.actionRow}>
                     <TouchableOpacity
                       style={styles.chatPartnerBtn}
-                      onPress={() =>
-                        handleStartChat(
-                          otherUser.id,
-                          otherUser.full_name,
-                          otherUser.profile_image
-                        )
-                      }
+                      onPress={() => handleStartChat(item)}
                     >
                       <Ionicons name="chatbubbles-outline" size={15} color="#4F46E5" />
-                      <Text style={styles.chatPartnerBtnText}>Chat with Partner</Text>
+                      <Text style={styles.chatPartnerBtnText}>Workspace Chat</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -606,18 +1011,94 @@ export const CollaborationScreen: React.FC = () => {
         </View>
       </Modal>
 
+      {/* ── Cancel Invitation Modal with Optional Reason ── */}
+      <Modal
+        visible={cancelInviteTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCancelInviteTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setCancelInviteTarget(null)}
+        >
+          <View style={[styles.modalCard, { maxWidth: 360 }]} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="alert-circle-outline" size={22} color="#DC2626" />
+                <Text style={styles.modalTitle}>Cancel Invitation</Text>
+              </View>
+              <TouchableOpacity onPress={() => setCancelInviteTarget(null)}>
+                <Ionicons name="close" size={24} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              <Text style={styles.actionPromptText}>
+                Are you sure you want to cancel the invitation sent to{' '}
+                <Text style={{ fontWeight: '700', color: '#0F172A' }}>
+                  {cancelInviteTarget?.invited_user?.full_name || cancelInviteTarget?.email}
+                </Text>?
+              </Text>
+
+              <Text style={styles.inputLabel}>Reason for Cancellation (Optional)</Text>
+              <TextInput
+                style={[styles.textInput, styles.textArea]}
+                placeholder="e.g. Scope changed, position filled, or invited by error..."
+                placeholderTextColor="#94A3B8"
+                value={cancelReason}
+                onChangeText={setCancelReason}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setCancelInviteTarget(null)}
+              >
+                <Text style={styles.modalCancelBtnText}>Keep Invite</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalConfirmBtn,
+                  { backgroundColor: '#DC2626' },
+                  isCancellingInvite && styles.disabledBtn,
+                ]}
+                onPress={handleConfirmCancelInvite}
+                disabled={isCancellingInvite}
+              >
+                {isCancellingInvite ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.modalConfirmBtnText}>Confirm Cancel</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ── Detail Inquiry View Modal ── */}
       <Modal
         visible={detailModalVisible}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => setDetailModalVisible(false)}
+        onRequestClose={() => {
+          setDetailModalVisible(false);
+          setActiveInviteForDetail(null);
+        }}
       >
         <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backBtn}
-              onPress={() => setDetailModalVisible(false)}
+              onPress={() => {
+                setDetailModalVisible(false);
+                setActiveInviteForDetail(null);
+              }}
             >
               <Ionicons name="close" size={24} color="#1E293B" />
             </TouchableOpacity>
@@ -627,6 +1108,91 @@ export const CollaborationScreen: React.FC = () => {
 
           {detailInquiry && (
             <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
+              {/* Workspace Invitation Action Callout Banner */}
+              {activeInviteForDetail && (
+                <View
+                  style={{
+                    backgroundColor: '#EEF2FF',
+                    borderRadius: 14,
+                    padding: 16,
+                    marginBottom: 16,
+                    borderWidth: 1.5,
+                    borderColor: '#C7D2FE',
+                    shadowColor: '#4F46E5',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.08,
+                    shadowRadius: 6,
+                    elevation: 2,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <Ionicons name="mail-open" size={20} color="#4F46E5" />
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#1E293B' }}>
+                      Workspace Invitation Received
+                    </Text>
+                  </View>
+
+                  <Text style={{ fontSize: 13, color: '#475569', marginBottom: 12, lineHeight: 18 }}>
+                    You have been invited by{' '}
+                    <Text style={{ fontWeight: '700', color: '#0F172A' }}>
+                      {activeInviteForDetail.invited_by?.full_name || activeInviteForDetail.invited_by?.pseudo || 'Partner'}
+                    </Text>{' '}
+                    to join as{' '}
+                    <Text style={{ fontWeight: '700', color: '#4F46E5' }}>
+                      {activeInviteForDetail.role === 'CHATROOM_ADMIN' ? 'Admin' : 'Member'}
+                    </Text>.
+                  </Text>
+
+                  {activeInviteForDetail.message ? (
+                    <View style={{ backgroundColor: '#FFFFFF', padding: 10, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#E0E7FF' }}>
+                      <Text style={{ fontSize: 12, color: '#475569', fontStyle: 'italic' }}>
+                        "{activeInviteForDetail.message}"
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <TouchableOpacity
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#FFFFFF',
+                        borderWidth: 1,
+                        borderColor: '#CBD5E1',
+                        paddingVertical: 10,
+                        borderRadius: 8,
+                        alignItems: 'center',
+                      }}
+                      onPress={async () => {
+                        const invId = activeInviteForDetail.id;
+                        setDetailModalVisible(false);
+                        setActiveInviteForDetail(null);
+                        await handleRespondInvitation(invId, 'decline');
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#64748B' }}>Decline</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={{
+                        flex: 1.5,
+                        backgroundColor: '#4F46E5',
+                        paddingVertical: 10,
+                        borderRadius: 8,
+                        alignItems: 'center',
+                      }}
+                      onPress={async () => {
+                        const invId = activeInviteForDetail.id;
+                        setDetailModalVisible(false);
+                        setActiveInviteForDetail(null);
+                        await handleRespondInvitation(invId, 'accept');
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#FFFFFF' }}>Accept & Join Chat</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
               <View style={styles.detailHeader}>
                 <View
                   style={[
@@ -709,21 +1275,22 @@ export const CollaborationScreen: React.FC = () => {
                 </View>
               )}
 
-              {/* Direct Message Action from Detail */}
-              <View style={{ marginTop: 16, marginBottom: 32 }}>
-                <TouchableOpacity
-                  style={styles.detailChatBtn}
-                  onPress={() => {
-                    const target = activeTab === 'received' ? detailInquiry.sender : detailInquiry.receiver;
-                    handleStartChat(target.id, target.full_name, target.profile_image);
-                  }}
-                >
-                  <Ionicons name="chatbubbles" size={18} color="#FFF" style={{ marginRight: 8 }} />
-                  <Text style={styles.detailChatBtnText}>
-                    Message {activeTab === 'received' ? detailInquiry.sender.full_name : detailInquiry.receiver.full_name}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              {/* Direct Message Action from Detail (only when not viewing a pending invitation) */}
+              {!activeInviteForDetail && (
+                <View style={{ marginTop: 16, marginBottom: 32 }}>
+                  <TouchableOpacity
+                    style={styles.detailChatBtn}
+                    onPress={() => handleStartChat(detailInquiry)}
+                  >
+                    <Ionicons name="chatbubbles" size={18} color="#FFF" style={{ marginRight: 8 }} />
+                    <Text style={styles.detailChatBtnText}>
+                      {detailInquiry.status === 'accepted' || detailInquiry.status === 'completed'
+                        ? 'Open Collaboration Workspace Chat'
+                        : `Message ${activeTab === 'received' ? detailInquiry.sender.full_name : detailInquiry.receiver.full_name}`}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </ScrollView>
           )}
         </SafeAreaView>

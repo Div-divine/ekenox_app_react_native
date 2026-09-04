@@ -5,6 +5,7 @@ import {
   Text,
   TouchableOpacity,
   FlatList,
+  ScrollView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -23,6 +24,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { AppColors } from '../theme/colors';
 import { useAuth } from '../context/AuthContext';
 import chatService, { ChatMessage, ChatReaction, ChatAttachment } from '../services/chatService';
+import collaborationService from '../services/collaborationService';
 import { UrlHelper } from '../utils/urlHelper';
 
 const getAudioModule = () => {
@@ -40,7 +42,20 @@ type RouteParams = {
   chatRoomId: string | number;
   name: string;
   logo?: string;
-  type?: 'direct' | 'group';
+  type?: 'direct' | 'group' | 'collaboration';
+  isGroup?: boolean;
+  collaborationData?: {
+    inquiryId: number;
+    subject: string;
+    collaborationType: string;
+    budgetAmount?: string | null;
+    currency?: string;
+    compensationType?: string;
+    status: string;
+    targetDate?: string | null;
+    sender?: any;
+    receiver?: any;
+  };
 };
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '👏', '🔥', '🎉'];
@@ -185,6 +200,25 @@ export const ChatRoomScreen = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
   const [playingAudioId, setPlayingAudioId] = useState<string | number | null>(null);
+
+  // Collaboration Workspace State
+  const [collabData, setCollabData] = useState<any>(route.params?.collaborationData || null);
+  const [collabAgreementModalVisible, setCollabAgreementModalVisible] = useState(false);
+  const [inviteCollabModalVisible, setInviteCollabModalVisible] = useState(false);
+  const [completeCollabModalVisible, setCompleteCollabModalVisible] = useState(false);
+  const [inviteTab, setInviteTab] = useState<'mutual' | 'email' | 'logs'>('mutual');
+  const [mutualFollowers, setMutualFollowers] = useState<any[]>([]);
+  const [isLoadingMutual, setIsLoadingMutual] = useState(false);
+  const [mutualSearchQuery, setMutualSearchQuery] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteMessage, setInviteMessage] = useState('');
+  const [invitationLogs, setInvitationLogs] = useState<any[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [cancelInviteTarget, setCancelInviteTarget] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>('');
+  const [inviteRole, setInviteRole] = useState<'CHATROOM_MEMBER' | 'CHATROOM_ADMIN'>('CHATROOM_MEMBER');
+  const [completeNote, setCompleteNote] = useState('');
+  const [isSubmittingCollabAction, setIsSubmittingCollabAction] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -466,12 +500,166 @@ interface StagedAttachment {
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
       setMessages(deduplicateMessages(sorted));
+
+      // Auto-populate collaboration data from system banner message if not present
+      if (!collabData) {
+        const collabMsg = sorted.find(
+          (m: any) =>
+            m.metadata?.type === 'collaboration_agreement_banner' ||
+            m.metadata?.type === 'collaboration_completed_banner' ||
+            m.metadata?.inquiry_id
+        );
+        if (collabMsg?.metadata) {
+          setCollabData({
+            inquiryId: collabMsg.metadata.inquiry_id,
+            subject: collabMsg.metadata.subject,
+            collaborationType: collabMsg.metadata.collaboration_type,
+            budgetAmount: collabMsg.metadata.budget,
+            currency: collabMsg.metadata.currency,
+            status: collabMsg.metadata.status || 'accepted',
+          });
+        }
+      }
     } catch (e: any) {
       console.error('Failed to load messages:', e.message);
     } finally {
       setIsLoading(false);
     }
-  }, [chatRoomId]);
+  }, [chatRoomId, collabData]);
+
+  const handleCompleteCollaboration = async () => {
+    if (!collabData?.inquiryId) return;
+    setIsSubmittingCollabAction(true);
+    try {
+      await collaborationService.completeInquiry(collabData.inquiryId, completeNote);
+      setCollabData((prev: any) => (prev ? { ...prev, status: 'completed' } : prev));
+      setCompleteCollabModalVisible(false);
+      setCompleteNote('');
+      loadMessages(false);
+      Alert.alert('Success', 'Collaboration marked as Completed! 🎉');
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err?.response?.data?.message || err?.message || 'Failed to complete collaboration.'
+      );
+    } finally {
+      setIsSubmittingCollabAction(false);
+    }
+  };
+
+  const loadMutualFollowers = async (query?: string) => {
+    if (!collabData?.inquiryId) return;
+    setIsLoadingMutual(true);
+    try {
+      const res = await collaborationService.getMutualFollowers(collabData.inquiryId, query);
+      setMutualFollowers(res.mutual_followers || []);
+    } catch (e) {
+      console.warn('Failed to load mutual followers for invite:', e);
+    } finally {
+      setIsLoadingMutual(false);
+    }
+  };
+
+  const loadInvitationLogs = async () => {
+    if (!collabData?.inquiryId) return;
+    setIsLoadingLogs(true);
+    try {
+      const res = await collaborationService.getInvitations(collabData.inquiryId);
+      setInvitationLogs(res.invitations || []);
+    } catch (e) {
+      console.warn('Failed to load invitation logs:', e);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  const handleOpenInviteModal = () => {
+    setInviteCollabModalVisible(true);
+    setInviteTab('mutual');
+    loadMutualFollowers();
+    loadInvitationLogs();
+  };
+
+  const handleInviteMutualFollower = async (targetUser: any) => {
+    if (!collabData?.inquiryId) return;
+    setIsSubmittingCollabAction(true);
+    try {
+      await collaborationService.inviteMember(collabData.inquiryId, {
+        userId: targetUser.id,
+        role: inviteRole,
+        message: inviteMessage.trim() || undefined,
+      });
+      Alert.alert('Invitation Sent! ✉️', `Invitation sent to ${targetUser.full_name || targetUser.pseudo}.`);
+      loadMutualFollowers(mutualSearchQuery);
+      loadInvitationLogs();
+      loadMessages(false);
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err?.response?.data?.message || err?.message || 'Failed to send invitation.'
+      );
+    } finally {
+      setIsSubmittingCollabAction(false);
+    }
+  };
+
+  const handleInviteEmail = async () => {
+    if (!collabData?.inquiryId) return;
+    const cleanEmail = inviteEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      return;
+    }
+    setIsSubmittingCollabAction(true);
+    try {
+      const res = await collaborationService.inviteMember(collabData.inquiryId, {
+        email: cleanEmail,
+        role: inviteRole,
+        message: inviteMessage.trim() || undefined,
+      });
+      Alert.alert('Success 🎉', res.message || 'Invitation sent successfully!');
+      setInviteEmail('');
+      setInviteMessage('');
+      setInviteTab('logs');
+      loadInvitationLogs();
+      loadMessages(false);
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err?.response?.data?.message || err?.message || 'Failed to send invitation.'
+      );
+    } finally {
+      setIsSubmittingCollabAction(false);
+    }
+  };
+
+  const handleCancelInvitation = (invite: any) => {
+    setCancelInviteTarget(invite);
+    setCancelReason('');
+  };
+
+  const handleConfirmCancelInvite = async () => {
+    if (!cancelInviteTarget) return;
+    setIsSubmittingCollabAction(true);
+    try {
+      await collaborationService.cancelInvitation(
+        cancelInviteTarget.id,
+        cancelReason.trim() || undefined
+      );
+      Alert.alert('Invitation Cancelled', 'The collaboration invitation has been cancelled.');
+      setCancelInviteTarget(null);
+      setCancelReason('');
+      loadInvitationLogs();
+      loadMutualFollowers(mutualSearchQuery);
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err?.response?.data?.message || err?.message || 'Failed to cancel invitation.'
+      );
+    } finally {
+      setIsSubmittingCollabAction(false);
+    }
+  };
 
   // Initial load
   useEffect(() => {
@@ -605,6 +793,162 @@ interface StagedAttachment {
     }
 
     if (!metadata || typeof metadata !== 'object') return null;
+
+    // ── Collaboration Agreement / Completion System Banner ──
+    if (
+      metadata.type === 'collaboration_agreement_banner' ||
+      metadata.type === 'collaboration_completed_banner'
+    ) {
+      const isCompleted =
+        metadata.type === 'collaboration_completed_banner' || metadata.status === 'completed';
+      return (
+        <View
+          style={[
+            styles.collabBannerCard,
+            isCompleted ? styles.collabCompletedCard : styles.collabActiveCard,
+          ]}
+        >
+          <View style={styles.collabBannerHeader}>
+            <Ionicons
+              name={isCompleted ? 'checkmark-circle' : 'briefcase'}
+              size={18}
+              color={isCompleted ? '#059669' : '#4F46E5'}
+            />
+            <Text
+              style={[
+                styles.collabBannerTitle,
+                { color: isCompleted ? '#065F46' : '#312E81' },
+              ]}
+            >
+              {isCompleted ? 'Collaboration Completed' : 'Collaboration Agreement'}
+            </Text>
+            <View
+              style={[
+                styles.collabBannerBadge,
+                { backgroundColor: isCompleted ? '#D1FAE5' : '#EEF2FF' },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.collabBannerBadgeText,
+                  { color: isCompleted ? '#065F46' : '#4338CA' },
+                ]}
+              >
+                {(metadata.status || (isCompleted ? 'COMPLETED' : 'ACCEPTED')).toUpperCase()}
+              </Text>
+            </View>
+          </View>
+          {metadata.subject ? (
+            <Text style={styles.collabBannerSubject}>{metadata.subject}</Text>
+          ) : null}
+          {metadata.budget ? (
+            <Text style={styles.collabBannerBudget}>
+              💰 Budget: {metadata.budget} {metadata.currency || 'EUR'}
+            </Text>
+          ) : null}
+          <TouchableOpacity
+            style={styles.collabBannerBtn}
+            onPress={() => setCollabAgreementModalVisible(true)}
+          >
+            <Text style={styles.collabBannerBtnText}>View Workspace Agreement</Text>
+            <Ionicons name="chevron-forward" size={14} color="#4F46E5" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // ── Collaboration Invitation / Acceptance / Member Metadata Card ──
+    const isCollaboration =
+      (typeof metadata.type === 'string' && metadata.type.startsWith('collaboration')) ||
+      metadata.inquiry_id ||
+      (typeof metadata.tag === 'string' && metadata.tag.toLowerCase().includes('collaboration'));
+
+    if (isCollaboration) {
+      const tagText = metadata.tag || 'Collaboration Invitation';
+      const titleText = metadata.title || metadata.subject || 'Collaboration Workspace';
+      const roleText =
+        metadata.role_label ||
+        (metadata.role ? (metadata.role === 'CHATROOM_ADMIN' ? 'Admin' : 'Collaborator') : '');
+      const subtitleText =
+        metadata.subtitle ||
+        (roleText
+          ? `Role: ${roleText}`
+          : metadata.collaboration_type
+          ? metadata.collaboration_type.replace(/_/g, ' ')
+          : '');
+      const statusText = metadata.status ? String(metadata.status).toUpperCase() : '';
+
+      return (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={[
+            styles.metadataCard,
+            isCurrentUser ? styles.metadataCardRight : styles.metadataCardLeft,
+            { borderColor: '#C7D2FE', backgroundColor: '#F8FAFC' },
+          ]}
+          onPress={() => setCollabAgreementModalVisible(true)}
+        >
+          <View style={styles.metadataCardInner}>
+            <View style={[styles.metadataImageFallback, { backgroundColor: '#EEF2FF' }]}>
+              <Ionicons name="briefcase" size={20} color="#4F46E5" />
+            </View>
+            <View style={styles.metadataInfo}>
+              <View style={styles.metadataTagRow}>
+                <Ionicons name="people" size={11} color="#4F46E5" />
+                <Text style={[styles.metadataTagText, { color: '#4F46E5' }]}>
+                  {tagText}
+                </Text>
+              </View>
+              <Text style={styles.metadataTitle} numberOfLines={1}>
+                {titleText}
+              </Text>
+              {subtitleText ? (
+                <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                  {subtitleText}
+                </Text>
+              ) : null}
+            </View>
+            {statusText ? (
+              <View
+                style={{
+                  backgroundColor: statusText === 'ACCEPTED' ? '#D1FAE5' : '#EEF2FF',
+                  paddingHorizontal: 7,
+                  paddingVertical: 2,
+                  borderRadius: 4,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 9,
+                    fontWeight: '800',
+                    color: statusText === 'ACCEPTED' ? '#065F46' : '#4F46E5',
+                  }}
+                >
+                  {statusText}
+                </Text>
+              </View>
+            ) : (
+              <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+            )}
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    // ── Marketplace Item Check ──
+    const isMarketplace =
+      metadata.type === 'marketplace_item' ||
+      metadata.type === 'product' ||
+      metadata.product_id ||
+      metadata.productId ||
+      metadata.product ||
+      metadata.product_title ||
+      metadata.seller_name ||
+      metadata.sellerName;
+
+    if (!isMarketplace) {
+      return null;
+    }
 
     const item = metadata.product || metadata.item || metadata;
 
@@ -940,6 +1284,78 @@ interface StagedAttachment {
         <Ionicons name="chevron-forward" size={16} color={AppColors.textMedium} style={{ marginRight: 4 }} />
       </View>
 
+      {/* ─── Pinned Collaboration Workspace Banner ─── */}
+      {collabData && (
+        <View style={styles.collabPinnedBar}>
+          <View style={styles.collabPinnedTop}>
+            <View style={styles.collabPinnedTitleRow}>
+              <Ionicons name="briefcase" size={15} color="#4F46E5" />
+              <Text style={styles.collabPinnedTitle} numberOfLines={1}>
+                {collabData.subject || 'Collaboration Workspace'}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.collabStatusBadge,
+                {
+                  backgroundColor:
+                    collabData.status === 'completed' ? '#EEF2FF' : '#ECFDF5',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.collabStatusText,
+                  {
+                    color:
+                      collabData.status === 'completed' ? '#4F46E5' : '#059669',
+                  },
+                ]}
+              >
+                {(collabData.status || 'ACCEPTED').toUpperCase()}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.collabPinnedBottom}>
+            <Text style={styles.collabPinnedSub} numberOfLines={1}>
+              🏷️ {collabData.collaborationType?.replace(/_/g, ' ') || 'Collaboration'} •{' '}
+              {collabData.budgetAmount
+                ? `💰 ${collabData.budgetAmount} ${collabData.currency || 'EUR'}`
+                : (collabData.compensationType || 'Negotiable')}
+            </Text>
+
+            <View style={styles.collabActionButtonsRow}>
+              <TouchableOpacity
+                style={styles.collabMiniBtn}
+                onPress={() => setCollabAgreementModalVisible(true)}
+              >
+                <Ionicons name="document-text-outline" size={12} color="#4F46E5" />
+                <Text style={styles.collabMiniBtnText}>Agreement</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.collabMiniBtn}
+                onPress={handleOpenInviteModal}
+              >
+                <Ionicons name="person-add-outline" size={12} color="#4F46E5" />
+                <Text style={styles.collabMiniBtnText}>Invite</Text>
+              </TouchableOpacity>
+
+              {collabData.status === 'accepted' && (
+                <TouchableOpacity
+                  style={[styles.collabMiniBtn, styles.collabCompleteMiniBtn]}
+                  onPress={() => setCompleteCollabModalVisible(true)}
+                >
+                  <Ionicons name="checkmark-done" size={12} color="#FFF" />
+                  <Text style={[styles.collabMiniBtnText, { color: '#FFF' }]}>Complete</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* ─── Message List ─── */}
       <KeyboardAvoidingView
         style={styles.keyboardContainer}
@@ -1208,6 +1624,534 @@ interface StagedAttachment {
             <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setOptionsModalVisible(false)}>
               <Text style={styles.modalCancelBtnText}>Cancel</Text>
             </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ─── Collaboration Agreement Details Modal ─── */}
+      <Modal
+        visible={collabAgreementModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setCollabAgreementModalVisible(false)}
+      >
+        <SafeAreaView style={styles.collabModalContainer} edges={['top', 'bottom']}>
+          <View style={styles.collabModalHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="briefcase" size={20} color="#4F46E5" />
+              <Text style={styles.collabModalTitle}>Collaboration Agreement</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setCollabAgreementModalVisible(false)}
+              style={styles.collabModalCloseBtn}
+            >
+              <Ionicons name="close" size={22} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+
+          {collabData && (
+            <View style={{ flex: 1, padding: 20 }}>
+              <View style={styles.collabModalCard}>
+                <Text style={styles.collabModalCardSubject}>{collabData.subject}</Text>
+                <View style={styles.collabModalMetaRow}>
+                  <View style={styles.collabModalTag}>
+                    <Text style={styles.collabModalTagText}>
+                      🏷️ {collabData.collaborationType?.replace(/_/g, ' ')}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.collabModalStatusBadge,
+                      { backgroundColor: collabData.status === 'completed' ? '#EEF2FF' : '#ECFDF5' },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.collabModalStatusText,
+                        { color: collabData.status === 'completed' ? '#4F46E5' : '#059669' },
+                      ]}
+                    >
+                      {(collabData.status || 'ACCEPTED').toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.collabModalSection}>
+                <Text style={styles.collabModalSectionHeader}>Compensation & Timeline</Text>
+                <Text style={styles.collabModalSectionText}>
+                  💰 Budget: {collabData.budgetAmount ? `${collabData.budgetAmount} ${collabData.currency || 'EUR'}` : (collabData.compensationType || 'Negotiable')}
+                </Text>
+                {collabData.targetDate ? (
+                  <Text style={styles.collabModalSectionText}>
+                    📅 Target Date: {new Date(collabData.targetDate).toLocaleDateString()}
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={styles.collabModalSection}>
+                <Text style={styles.collabModalSectionHeader}>Workspace Tools</Text>
+                <Text style={{ fontSize: 13, color: '#64748B', lineHeight: 18, marginBottom: 12 }}>
+                  Use this dedicated workspace to exchange media, coordinate deliverables, invite team members, and finalize project execution.
+                </Text>
+              </View>
+
+              <View style={{ marginTop: 'auto', gap: 10 }}>
+                {collabData.status === 'accepted' && (
+                  <TouchableOpacity
+                    style={styles.collabModalCompleteBtn}
+                    onPress={() => {
+                      setCollabAgreementModalVisible(false);
+                      setCompleteCollabModalVisible(true);
+                    }}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={18} color="#FFF" />
+                    <Text style={styles.collabModalCompleteBtnText}>Mark as Completed</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={styles.collabModalInviteBtn}
+                  onPress={() => {
+                    setCollabAgreementModalVisible(false);
+                    handleOpenInviteModal();
+                  }}
+                >
+                  <Ionicons name="person-add-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.collabModalInviteBtnText}>Invite Stakeholder / Team Member</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
+
+      {/* ─── Invite Collaborator Modal (Mutual Followers / Email / Logs) ─── */}
+      <Modal
+        visible={inviteCollabModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setInviteCollabModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setInviteCollabModalVisible(false)}
+          />
+          <View
+            style={[
+              styles.collabActionModalBox,
+              {
+                width: '100%',
+                maxWidth: '100%',
+                maxHeight: '90%',
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                borderBottomLeftRadius: 0,
+                borderBottomRightRadius: 0,
+                padding: 0,
+                paddingBottom: Math.max(insets.bottom, 16),
+              },
+            ]}
+          >
+            {/* Modal Handle Bar */}
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', alignSelf: 'center', marginTop: 10, marginBottom: 4 }} />
+
+            {/* Modal Header */}
+            <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="person-add" size={20} color="#4F46E5" />
+                  <Text style={styles.collabActionModalTitle}>Invite Collaborators</Text>
+                </View>
+                <TouchableOpacity onPress={() => setInviteCollabModalVisible(false)} style={{ padding: 4 }}>
+                  <Ionicons name="close" size={20} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Segmented Tab Controls */}
+              <View style={{ flexDirection: 'row', backgroundColor: '#F1F5F9', borderRadius: 8, padding: 3, marginTop: 12 }}>
+                <TouchableOpacity
+                  style={[{ flex: 1, paddingVertical: 7, borderRadius: 6, alignItems: 'center' }, inviteTab === 'mutual' && { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 }]}
+                  onPress={() => setInviteTab('mutual')}
+                >
+                  <Text style={[{ fontSize: 12, fontWeight: '700', color: '#64748B' }, inviteTab === 'mutual' && { color: '#4F46E5' }]}>👥 Mutuals</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[{ flex: 1, paddingVertical: 7, borderRadius: 6, alignItems: 'center' }, inviteTab === 'email' && { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 }]}
+                  onPress={() => setInviteTab('email')}
+                >
+                  <Text style={[{ fontSize: 12, fontWeight: '700', color: '#64748B' }, inviteTab === 'email' && { color: '#4F46E5' }]}>✉️ Email</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[{ flex: 1, paddingVertical: 7, borderRadius: 6, alignItems: 'center' }, inviteTab === 'logs' && { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 }]}
+                  onPress={() => {
+                    setInviteTab('logs');
+                    loadInvitationLogs();
+                  }}
+                >
+                  <Text style={[{ fontSize: 12, fontWeight: '700', color: '#64748B' }, inviteTab === 'logs' && { color: '#4F46E5' }]}>
+                    📋 Logs {invitationLogs.length > 0 ? `(${invitationLogs.length})` : ''}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Tab 1: Mutual Followers */}
+            {inviteTab === 'mutual' && (
+              <View style={{ padding: 16, maxHeight: 420 }}>
+                <TextInput
+                  style={[styles.collabTextInput, { marginBottom: 10 }]}
+                  placeholder="🔍 Search mutual friends..."
+                  placeholderTextColor="#94A3B8"
+                  value={mutualSearchQuery}
+                  onChangeText={txt => {
+                    setMutualSearchQuery(txt);
+                    loadMutualFollowers(txt);
+                  }}
+                />
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155' }}>Select Role to Assign:</Text>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <TouchableOpacity
+                      style={[{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#F1F5F9' }, inviteRole === 'CHATROOM_MEMBER' && { backgroundColor: '#4F46E5' }]}
+                      onPress={() => setInviteRole('CHATROOM_MEMBER')}
+                    >
+                      <Text style={[{ fontSize: 11, fontWeight: '700', color: '#64748B' }, inviteRole === 'CHATROOM_MEMBER' && { color: '#FFF' }]}>Member</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#F1F5F9' }, inviteRole === 'CHATROOM_ADMIN' && { backgroundColor: '#4F46E5' }]}
+                      onPress={() => setInviteRole('CHATROOM_ADMIN')}
+                    >
+                      <Text style={[{ fontSize: 11, fontWeight: '700', color: '#64748B' }, inviteRole === 'CHATROOM_ADMIN' && { color: '#FFF' }]}>Admin</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {isLoadingMutual ? (
+                  <View style={{ padding: 30, alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color="#4F46E5" />
+                    <Text style={{ fontSize: 12, color: '#64748B', marginTop: 8 }}>Loading mutual followers...</Text>
+                  </View>
+                ) : mutualFollowers.length === 0 ? (
+                  <View style={{ padding: 24, alignItems: 'center' }}>
+                    <Ionicons name="people-outline" size={32} color="#CBD5E1" />
+                    <Text style={{ fontSize: 13, color: '#64748B', marginTop: 6, textAlign: 'center' }}>
+                      No mutual followers found. You can invite anyone by typing their email in the Email tab!
+                    </Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={mutualFollowers}
+                    keyExtractor={item => String(item.id)}
+                    showsVerticalScrollIndicator={false}
+                    style={{ maxHeight: 280 }}
+                    renderItem={({ item }) => {
+                      const avatarUri = item.profile_image ? UrlHelper.convertPathToUrl(item.profile_image) : null;
+                      return (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, marginRight: 10 }}>
+                            {avatarUri ? (
+                              <Image source={{ uri: avatarUri }} style={{ width: 36, height: 36, borderRadius: 18 }} />
+                            ) : (
+                              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center' }}>
+                                <Text style={{ fontSize: 14, fontWeight: '700', color: '#4F46E5' }}>{(item.full_name || item.pseudo || 'U').charAt(0)}</Text>
+                              </View>
+                            )}
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }} numberOfLines={1}>{item.full_name || item.pseudo}</Text>
+                              <Text style={{ fontSize: 11, color: '#64748B' }} numberOfLines={1}>{item.email}</Text>
+                            </View>
+                          </View>
+
+                          {item.is_member ? (
+                            <View style={{ backgroundColor: '#ECFDF5', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', color: '#059669' }}>JOINED</Text>
+                            </View>
+                          ) : item.has_pending_invitation ? (
+                            <View style={{ backgroundColor: '#FFFBEB', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', color: '#D97706' }}>PENDING</Text>
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#C7D2FE' }}
+                              onPress={() => handleInviteMutualFollower(item)}
+                              disabled={isSubmittingCollabAction}
+                            >
+                              <Text style={{ fontSize: 12, fontWeight: '700', color: '#4F46E5' }}>Invite</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      );
+                    }}
+                  />
+                )}
+              </View>
+            )}
+
+            {/* Tab 2: Invite by Email */}
+            {inviteTab === 'email' && (
+              <ScrollView style={{ padding: 16, maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                <Text style={styles.collabInputLabel}>Recipient Email Address *</Text>
+                <TextInput
+                  style={styles.collabTextInput}
+                  placeholder="e.g. partner@brand.com"
+                  placeholderTextColor="#94A3B8"
+                  value={inviteEmail}
+                  onChangeText={setInviteEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+
+                <Text style={styles.collabInputLabel}>Workspace Role</Text>
+                <View style={styles.collabRoleRow}>
+                  <TouchableOpacity
+                    style={[styles.collabRoleChip, inviteRole === 'CHATROOM_MEMBER' && styles.collabRoleChipActive]}
+                    onPress={() => setInviteRole('CHATROOM_MEMBER')}
+                  >
+                    <Text style={[styles.collabRoleChipText, inviteRole === 'CHATROOM_MEMBER' && styles.collabRoleChipTextActive]}>Member / Contributor</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.collabRoleChip, inviteRole === 'CHATROOM_ADMIN' && styles.collabRoleChipActive]}
+                    onPress={() => setInviteRole('CHATROOM_ADMIN')}
+                  >
+                    <Text style={[styles.collabRoleChipText, inviteRole === 'CHATROOM_ADMIN' && styles.collabRoleChipTextActive]}>Admin / Co-Host</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.collabInputLabel}>Personal Note (Optional)</Text>
+                <TextInput
+                  style={[styles.collabTextInput, { height: 64, textAlignVertical: 'top' }]}
+                  placeholder="Add a friendly note or instructions..."
+                  placeholderTextColor="#94A3B8"
+                  value={inviteMessage}
+                  onChangeText={setInviteMessage}
+                  multiline
+                />
+
+                <View style={{ backgroundColor: '#F8FAFC', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 14 }}>
+                  <Text style={{ fontSize: 11, color: '#64748B', lineHeight: 16 }}>
+                    💡 If the user already has an EkeNox account, they'll receive an instant in-app invitation & email. If not registered, they'll receive an invitation email with full project details and an onboarding link.
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.collabModalConfirm, { width: '100%', paddingVertical: 12, marginBottom: 10 }, isSubmittingCollabAction && { opacity: 0.6 }]}
+                  onPress={handleInviteEmail}
+                  disabled={isSubmittingCollabAction}
+                >
+                  {isSubmittingCollabAction ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.collabModalConfirmText}>Send Email Invitation</Text>
+                  )}
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* Tab 3: Invitation Logs & Status */}
+            {inviteTab === 'logs' && (
+              <View style={{ padding: 16, maxHeight: 420 }}>
+                {isLoadingLogs ? (
+                  <View style={{ padding: 30, alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color="#4F46E5" />
+                    <Text style={{ fontSize: 12, color: '#64748B', marginTop: 8 }}>Loading invitation logs...</Text>
+                  </View>
+                ) : invitationLogs.length === 0 ? (
+                  <View style={{ padding: 24, alignItems: 'center' }}>
+                    <Ionicons name="mail-unread-outline" size={32} color="#CBD5E1" />
+                    <Text style={{ fontSize: 13, color: '#64748B', marginTop: 6, textAlign: 'center' }}>
+                      No invitations have been sent yet for this collaboration.
+                    </Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={invitationLogs}
+                    keyExtractor={item => String(item.id)}
+                    showsVerticalScrollIndicator={false}
+                    style={{ maxHeight: 320 }}
+                    renderItem={({ item }) => {
+                      const isPending = item.status === 'pending';
+                      const isAccepted = item.status === 'accepted';
+                      const isDeclined = item.status === 'declined';
+                      const statusColor = isAccepted ? '#059669' : isPending ? '#D97706' : isDeclined ? '#DC2626' : '#64748B';
+                      const statusBg = isAccepted ? '#ECFDF5' : isPending ? '#FFFBEB' : isDeclined ? '#FEF2F2' : '#F1F5F9';
+
+                      return (
+                        <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A', flex: 1, marginRight: 8 }} numberOfLines={1}>
+                              {item.invited_user?.full_name || item.email}
+                            </Text>
+                            <View style={{ backgroundColor: statusBg, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '800', color: statusColor }}>
+                                {item.status.toUpperCase()}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <Text style={{ fontSize: 11, color: '#64748B', marginBottom: 6 }}>
+                            {item.email} • Role: <Text style={{ fontWeight: '700', color: '#4F46E5' }}>{item.role === 'CHATROOM_ADMIN' ? 'Admin' : 'Member'}</Text>
+                          </Text>
+
+                          {item.message ? (
+                            <Text style={{ fontSize: 11, color: '#475569', fontStyle: 'italic', marginBottom: 6 }}>
+                              "{item.message}"
+                            </Text>
+                          ) : null}
+
+                          {item.cancellation_reason ? (
+                            <View style={{ backgroundColor: '#FEF2F2', padding: 8, borderRadius: 6, marginVertical: 4 }}>
+                              <Text style={{ fontSize: 11, color: '#991B1B' }}>
+                                Cancelled Reason: "{item.cancellation_reason}"
+                              </Text>
+                            </View>
+                          ) : null}
+
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#F1F5F9' }}>
+                            <Text style={{ fontSize: 10, color: '#94A3B8' }}>
+                              Invited by {item.invited_by?.full_name || 'Owner'}
+                            </Text>
+                            {isPending && (
+                              <TouchableOpacity onPress={() => handleCancelInvitation(item)}>
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#EF4444' }}>Cancel Invite</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    }}
+                  />
+                )}
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── Cancel Invitation Modal with Optional Reason ─── */}
+      <Modal
+        visible={cancelInviteTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCancelInviteTarget(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setCancelInviteTarget(null)}
+        >
+          <View style={styles.collabActionModalBox} onStartShouldSetResponder={() => true}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Ionicons name="alert-circle-outline" size={22} color="#EF4444" />
+              <Text style={styles.collabActionModalTitle}>Cancel Invitation</Text>
+            </View>
+
+            <Text style={styles.collabActionModalSubtitle}>
+              Are you sure you want to cancel the invitation sent to{' '}
+              <Text style={{ fontWeight: '700', color: '#0F172A' }}>
+                {cancelInviteTarget?.invited_user?.full_name || cancelInviteTarget?.email}
+              </Text>?
+            </Text>
+
+            <Text style={styles.collabInputLabel}>Reason for Cancellation (Optional)</Text>
+            <TextInput
+              style={[styles.collabTextInput, { height: 60, textAlignVertical: 'top' }]}
+              placeholder="e.g. Position filled, date conflict, or invited by mistake..."
+              placeholderTextColor="#94A3B8"
+              value={cancelReason}
+              onChangeText={setCancelReason}
+              multiline
+            />
+
+            <View style={styles.collabModalActions}>
+              <TouchableOpacity
+                style={styles.collabModalCancel}
+                onPress={() => setCancelInviteTarget(null)}
+              >
+                <Text style={styles.collabModalCancelText}>Keep Invite</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.collabModalConfirm,
+                  { backgroundColor: '#EF4444' },
+                  isSubmittingCollabAction && { opacity: 0.6 },
+                ]}
+                onPress={handleConfirmCancelInvite}
+                disabled={isSubmittingCollabAction}
+              >
+                {isSubmittingCollabAction ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.collabModalConfirmText}>Confirm Cancel</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ─── Mark Collaboration Complete Modal ─── */}
+      <Modal
+        visible={completeCollabModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCompleteCollabModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setCompleteCollabModalVisible(false)}
+        >
+          <View style={styles.collabActionModalBox}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Ionicons name="checkmark-done-circle" size={22} color="#059669" />
+              <Text style={styles.collabActionModalTitle}>Mark as Completed</Text>
+            </View>
+            <Text style={styles.collabActionModalSubtitle}>
+              Have all deliverables been fulfilled? Marking this collaboration as completed will update the project state for all participants.
+            </Text>
+
+            <Text style={styles.collabInputLabel}>Completion Note (Optional)</Text>
+            <TextInput
+              style={[styles.collabTextInput, { height: 70, textAlignVertical: 'top' }]}
+              placeholder="e.g. Deliverables submitted and verified..."
+              placeholderTextColor="#94A3B8"
+              value={completeNote}
+              onChangeText={setCompleteNote}
+              multiline
+            />
+
+            <View style={styles.collabModalActions}>
+              <TouchableOpacity
+                style={styles.collabModalCancel}
+                onPress={() => setCompleteCollabModalVisible(false)}
+              >
+                <Text style={styles.collabModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.collabModalConfirm,
+                  { backgroundColor: '#059669' },
+                  isSubmittingCollabAction && { opacity: 0.6 },
+                ]}
+                onPress={handleCompleteCollaboration}
+                disabled={isSubmittingCollabAction}
+              >
+                {isSubmittingCollabAction ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.collabModalConfirmText}>Confirm Complete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1926,4 +2870,353 @@ const styles = StyleSheet.create({
   stagedCloseBtn: {
     padding: 6,
   },
+
+  // ── Pinned Collaboration Workspace Bar ──
+  collabPinnedBar: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  collabPinnedTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  collabPinnedTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    marginRight: 8,
+  },
+  collabPinnedTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  collabStatusBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  collabStatusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  collabPinnedBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  collabPinnedSub: {
+    fontSize: 11,
+    color: '#64748B',
+    flex: 1,
+    marginRight: 6,
+  },
+  collabActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  collabMiniBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+  },
+  collabMiniBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  collabCompleteMiniBtn: {
+    backgroundColor: '#059669',
+    borderColor: '#059669',
+  },
+
+  // ── Collaboration Banner Message Bubble Card ──
+  collabBannerCard: {
+    padding: 14,
+    borderRadius: 14,
+    marginVertical: 4,
+    borderWidth: 1,
+  },
+  collabActiveCard: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+  },
+  collabCompletedCard: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  collabBannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  collabBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+  },
+  collabBannerBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  collabBannerBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  collabBannerSubject: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  collabBannerBudget: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#059669',
+    marginBottom: 8,
+  },
+  collabBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  collabBannerBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+
+  // ── Collaboration Modals ──
+  collabModalContainer: {
+    flex: 1,
+    backgroundColor: '#FFF',
+  },
+  collabModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  collabModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  collabModalCloseBtn: {
+    padding: 4,
+  },
+  collabModalCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+  },
+  collabModalCardSubject: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1E293B',
+    marginBottom: 10,
+  },
+  collabModalMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  collabModalTag: {
+    backgroundColor: '#FFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  collabModalTagText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+    textTransform: 'capitalize',
+  },
+  collabModalStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  collabModalStatusText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  collabModalSection: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 14,
+  },
+  collabModalSectionHeader: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 6,
+  },
+  collabModalSectionText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+  collabModalCompleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#059669',
+    paddingVertical: 13,
+    borderRadius: 10,
+  },
+  collabModalCompleteBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  collabModalInviteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#EEF2FF',
+    paddingVertical: 13,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  collabModalInviteBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  collabActionModalBox: {
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    padding: 20,
+    width: '90%',
+    maxWidth: 400,
+  },
+  collabActionModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  collabActionModalSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  collabInputLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  collabTextInput: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#0F172A',
+    marginBottom: 14,
+  },
+  collabRoleRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 18,
+  },
+  collabRoleChip: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  collabRoleChipActive: {
+    backgroundColor: '#4F46E5',
+    borderColor: '#4F46E5',
+  },
+  collabRoleChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  collabRoleChipTextActive: {
+    color: '#FFF',
+  },
+  collabModalActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  collabModalCancel: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+  },
+  collabModalCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  collabModalConfirm: {
+    flex: 1.5,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: '#4F46E5',
+  },
+  collabModalConfirmText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFF',
+  },
 });
+

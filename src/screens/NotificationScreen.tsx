@@ -86,8 +86,20 @@ export const NotificationScreen = () => {
       }
       return;
     }
-    if (item.type?.startsWith('collaboration_inquiry')) {
-      navigation.navigate('Collaboration');
+    if (item.type?.startsWith('collaboration')) {
+      if (data.chat_room_id) {
+        navigation.navigate('ChatRoom', {
+          chatRoomId: data.chat_room_id,
+          chatRoomName: data.subject || 'Collaboration Workspace',
+          isGroup: true,
+          collaborationData: {
+            id: data.inquiry_id,
+            subject: data.subject,
+          },
+        });
+      } else {
+        navigation.navigate('Collaboration');
+      }
       return;
     }
     if (data.group_id) {
